@@ -14,16 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-load("//build/bazel/product_variables:constants.bzl", "constants")
-load(
-    "@bazel_tools//tools/build_defs/cc:action_names.bzl",
-    "CPP_COMPILE_ACTION_NAME",
-    "C_COMPILE_ACTION_NAME",
-)
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@soong_injection//api_levels:api_levels.bzl", "api_levels")
 load("@soong_injection//product_config:product_variables.bzl", "product_vars")
 load("@soong_injection//android:constants.bzl", android_constants = "constants")
+load("//build/bazel/rules:common.bzl", "strip_bp2build_label_suffix")
 
 _bionic_targets = ["//bionic/libc", "//bionic/libdl", "//bionic/libm"]
 _static_bionic_targets = ["//bionic/libc:libc_bp2build_cc_library_static", "//bionic/libdl:libdl_bp2build_cc_library_static", "//bionic/libm:libm_bp2build_cc_library_static"]
@@ -61,7 +56,7 @@ _bionic_libs = ["libc", "libm", "libdl", "libdl_android", "linker", "linkerconfi
 # https://cs.android.com/android/platform/superproject/+/master:build/soong/cc/cc.go;l=1450;drc=9fd9129b5728602a4768e8e8e695660b683c405e
 _bootstrap_libs = ["libclang_rt.hwasan"]
 
-future_version = "10000"
+future_version = 10000
 
 CcSanitizerLibraryInfo = provider(
     "Denotes which sanitizer libraries to include",
@@ -93,7 +88,23 @@ def get_sanitizer_lib_info(features, deps):
 def _sanitizer_deps_impl(ctx):
     if (CcSanitizerLibraryInfo in ctx.attr.dep and
         ctx.attr.dep[CcSanitizerLibraryInfo].propagate_ubsan_deps):
-        return [ctx.attr._ubsan_library[CcInfo]]
+        # To operate correctly with native cc_binary and cc_sharedLibrary,
+        # copy the linker inputs and ensure that this target is marked as the
+        # "owner". Otherwise, upstream targets may drop these linker inputs.
+        # See b/264894507.
+        libraries = [
+            lib
+            for input in ctx.attr._ubsan_library[CcInfo].linking_context.linker_inputs.to_list()
+            for lib in input.libraries
+        ]
+        new_linker_input = cc_common.create_linker_input(
+            owner = ctx.label,
+            libraries = depset(direct = libraries),
+        )
+        linking_context = cc_common.create_linking_context(
+            linker_inputs = depset(direct = [new_linker_input]),
+        )
+        return [CcInfo(linking_context = linking_context)]
     return [CcInfo()]
 
 # This rule is essentially a workaround to be able to add dependencies
@@ -115,11 +126,14 @@ sanitizer_deps = rule(
     },
 )
 
+def sdk_version_feature_from_parsed_version(version):
+    return "sdk_version_" + str(version)
+
 def _create_sdk_version_features_map():
     version_feature_map = {}
     for api in api_levels.values():
-        version_feature_map["//build/bazel/rules/apex:min_sdk_version_" + str(api)] = ["sdk_version_" + str(api)]
-    version_feature_map["//conditions:default"] = ["sdk_version_" + future_version]
+        version_feature_map["//build/bazel/rules/apex:min_sdk_version_" + str(api)] = [sdk_version_feature_from_parsed_version(api)]
+    version_feature_map["//conditions:default"] = [sdk_version_feature_from_parsed_version(future_version)]
 
     return version_feature_map
 
@@ -215,35 +229,36 @@ def is_external_directory(package_name):
 def parse_sdk_version(version):
     if version == "apex_inherit":
         # use the version determined by the transition value.
-        return sdk_version_features + ["sdk_version_apex_inherit"]
+        return sdk_version_features + [sdk_version_feature_from_parsed_version("apex_inherit")]
 
-    return ["sdk_version_" + parse_apex_sdk_version(version)]
+    return [sdk_version_feature_from_parsed_version(parse_apex_sdk_version(version))]
 
 def parse_apex_sdk_version(version):
     if version == "" or version == "current":
         return future_version
-    elif version.isdigit() and int(version) in api_levels.values():
-        return version
     elif version in api_levels.keys():
-        return str(api_levels[version])
-    elif version.isdigit() and int(version) == product_vars["Platform_sdk_version"]:
-        # For internal branch states, support parsing a finalized version number
-        # that's also still in
-        # product_vars["Platform_version_active_codenames"], but not api_levels.
-        #
-        # This happens a few months each year on internal branches where the
-        # internal master branch has a finalized API, but is not released yet,
-        # therefore the Platform_sdk_version is usually latest AOSP dessert
-        # version + 1. The generated api_levels map sets these to 9000 + i,
-        # where i is the index of the current/future version, so version is not
-        # in the api_levels.values() list, but it is a valid sdk version.
-        #
-        # See also b/234321488#comment2
-        return version
-    else:
-        fail("Unknown sdk version: %s, could not be parsed as " % version +
-             "an integer and/or is not a recognized codename. Valid api levels are:" +
-             str(api_levels))
+        return api_levels[version]
+    elif version.isdigit():
+        version = int(version)
+        if version in api_levels.values():
+            return version
+        elif version == product_vars["Platform_sdk_version"]:
+            # For internal branch states, support parsing a finalized version number
+            # that's also still in
+            # product_vars["Platform_version_active_codenames"], but not api_levels.
+            #
+            # This happens a few months each year on internal branches where the
+            # internal master branch has a finalized API, but is not released yet,
+            # therefore the Platform_sdk_version is usually latest AOSP dessert
+            # version + 1. The generated api_levels map sets these to 9000 + i,
+            # where i is the index of the current/future version, so version is not
+            # in the api_levels.values() list, but it is a valid sdk version.
+            #
+            # See also b/234321488#comment2
+            return version
+    fail("Unknown sdk version: %s, could not be parsed as " % version +
+         "an integer and/or is not a recognized codename. Valid api levels are:" +
+         str(api_levels))
 
 CPP_EXTENSIONS = ["cc", "cpp", "c++"]
 
@@ -359,3 +374,36 @@ def is_bionic_lib(name):
 
 def is_bootstrap_lib(name):
     return name in _bootstrap_libs
+
+CcAndroidMkInfo = provider(
+    "Provides information to be passed to AndroidMk in Soong",
+    fields = {
+        "local_static_libs": "list of target names passed to LOCAL_STATIC_LIBRARIES AndroidMk variable",
+        "local_whole_static_libs": "list of target names passed to LOCAL_WHOLE_STATIC_LIBRARIES AndroidMk variable",
+        "local_shared_libs": "list of target names passed to LOCAL_SHARED_LIBRARIES AndroidMk variable",
+    },
+)
+
+def create_cc_androidmk_provider(*, static_deps, whole_archive_deps, dynamic_deps):
+    # Since this information is provided to Soong for mixed builds,
+    # we are just taking the Soong module name rather than the Bazel
+    # label.
+    # TODO(b/266197834) consider moving this logic to the mixed builds
+    # handler in Soong
+    local_static_libs = [
+        strip_bp2build_label_suffix(d.label.name)
+        for d in static_deps
+    ]
+    local_whole_static_libs = [
+        strip_bp2build_label_suffix(d.label.name)
+        for d in whole_archive_deps
+    ]
+    local_shared_libs = [
+        strip_bp2build_label_suffix(d.label.name)
+        for d in dynamic_deps
+    ]
+    return CcAndroidMkInfo(
+        local_static_libs = local_static_libs,
+        local_whole_static_libs = local_whole_static_libs,
+        local_shared_libs = local_shared_libs,
+    )

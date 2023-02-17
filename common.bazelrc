@@ -1,22 +1,9 @@
-# Platforms and toolchains for AOSP.
-#
-# Set default target platform for builds to rely on product config's arch and os variables
-build --platforms //build/bazel/platforms:linux_x86_64
-build --platform_mappings=build/bazel/platforms/platform_mappings
-
-build:android --platforms=//build/bazel/platforms:android_target
-build:linux_x86_64 --platforms=//build/bazel/platforms:linux_x86_64
-
-# Ban command line usage of setting --platforms to anything other than
-# android_target and host linux. The target platform should be determined by
-# product config / lunch.
-startup --invocation_policy="flag_policies { flag_name: \"platforms\" allow_values { allowed_values: \"//build/bazel/platforms:android_target\", allowed_values: \"//build/bazel/platforms:linux_x86_64\"}}"
-
 # Use the target platform (android_x86, android_arm) in the bazel-out/ output
 # directory name fragment instead of the CPU (darwin, k8). This avoids
 # thrashing the output directory when switching between top level target
 # --platforms values.
 build --experimental_platform_in_output_dir
+build --platform_mappings=build/bazel/platforms/platform_mappings
 
 # Use toolchain resolution to find the cc toolchain.
 build --incompatible_enable_cc_toolchain_resolution
@@ -38,7 +25,7 @@ build --experimental_strict_action_env
 build --experimental_allow_unresolved_symlinks
 
 # Enable usage of experimental cc-related build APIs
-build --experimental_cc_shared_library
+common --experimental_cc_shared_library
 build --experimental_starlark_cc_import
 
 # Do not tokenize copts, other than strings that consist of a single Make
@@ -96,8 +83,8 @@ try-import %workspace%/user.bazelrc
 build --experimental_output_directory_naming_scheme=diff_against_baseline
 common --experimental_google_legacy_api
 build --android_sdk=//prebuilts/sdk:android_sdk
-build --experimental_enable_android_migration_apis
-build --incompatible_java_common_parameters
+common --experimental_enable_android_migration_apis
+common --incompatible_java_common_parameters
 build --android_databinding_use_v3_4_args
 build --experimental_android_databinding_v2
 build --define=android_incremental_dexing_tool=d8_dexbuilder
@@ -114,3 +101,16 @@ build --noincompatible_use_python_toolchains
 # Enable optimization compilation mode to build cc with fdo
 # https://github.com/bazelbuild/bazel/blob/de7b26acfdfcd9c36ec957305a889ac29f0da30e/src/main/java/com/google/devtools/build/lib/rules/cpp/FdoHelper.java#L55
 build --compilation_mode=opt
+
+common --incompatible_remove_rule_name_parameter=false
+
+# TODO(b/264304464): Remove when bugs with java_binary starlark impl are fixed.
+
+common --experimental_builtins_injection_override=-java_binary
+
+# Set writable bit for all bazel outputs. This makes it easy to remove
+# the output directory and its contents after a build (using `rm`).
+build --experimental_writable_outputs
+
+# Make the Linux sandbox work under /tmp
+build --incompatible_sandbox_hermetic_tmp

@@ -16,6 +16,7 @@ limitations under the License.
 
 load("//build/bazel/rules/cc:cc_library_shared.bzl", "CcStubLibrariesInfo")
 load("//build/bazel/rules/cc:cc_stub_library.bzl", "CcStubLibrarySharedInfo")
+load("//build/bazel/rules/cc:cc_library_common.bzl", "parse_apex_sdk_version")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 
 ApexCcInfo = provider(
@@ -26,6 +27,41 @@ ApexCcInfo = provider(
         "requires_native_libs": "Labels of native shared libs that this apex requires.",
     },
 )
+
+ApexCcMkInfo = provider(
+    "AndroidMk data about CC targets in APEXes",
+    fields = {
+        "make_modules_to_install": "List of module names that should be installed into the system, along with this APEX",
+    },
+)
+
+# Special libraries that are installed to the bootstrap subdirectory. Bionic
+# libraries are assumed to be provided by the system, and installed automatically
+# as a symlink to the runtime APEX.
+#
+# This list is from https://cs.android.com/android/platform/superproject/+/master:build/soong/cc/cc.go;l=1439-1452;drc=9c667416ded33b93a44c5f1894ea23cae6699a17
+#
+# NOTE: Keep this list in sync with the Soong list.
+#
+# See cc/binary.go#install for more information.
+def _installed_to_bootstrap(label):
+    label = str(label)
+
+    # hwasan
+    if label == "@//prebuilts/clang/host/linux-x86:libclang_rt.hwasan":
+        return True
+
+    # bionic libs
+    if label in [
+        "@//bionic/libc:libc",
+        "@//bionic/libm:libm",
+        "@//bionic/libdl:libdl",
+        "@//bionic/libdl_android:libdl_android",
+        "@//bionic/linker:linker",
+    ]:
+        return True
+
+    return False
 
 # Return True if this target provides stubs.
 #
@@ -72,7 +108,10 @@ def get_min_sdk_version(ctx):
     min_sdk_version = None
     apex_inherit = False
     if hasattr(ctx.rule.attr, "min_sdk_version"):
-        min_sdk_version = ctx.rule.attr.min_sdk_version
+        if ctx.rule.attr.min_sdk_version == "apex_inherit":
+            apex_inherit = True
+        elif ctx.rule.attr.min_sdk_version:
+            min_sdk_version = parse_apex_sdk_version(ctx.rule.attr.min_sdk_version)
     else:
         # min_sdk_version in cc targets are represented as features
         for f in ctx.rule.attr.features:
@@ -82,7 +121,7 @@ def get_min_sdk_version(ctx):
                 if sdk_version == "apex_inherit":
                     apex_inherit = True
                 elif min_sdk_version == None:
-                    min_sdk_version = sdk_version
+                    min_sdk_version = int(sdk_version)
                 else:
                     fail(
                         "found more than one sdk_version feature on {target}; features = {features}",
@@ -94,26 +133,10 @@ def get_min_sdk_version(ctx):
         apex_inherit = apex_inherit,
     )
 
-def _compare_sdk_version(v1, v2):
-    max = ["current", "10000"]
-    if v1 in max and v2 not in max:
-        return 1
-    elif v2 in max and v1 not in max:
-        return -1
-    if v1.isdigit():
-        v1 = int(v1)
-    else:
-        fail("tried to parse invalid min_sdk_version: %s".format(v1))
-    if v2.isdigit():
-        v2 = int(v2)
-    else:
-        fail("tried to parse invalid min_sdk_version: %s".format(v2))
-    return v1 - v2
-
 def _validate_min_sdk_version(ctx):
     dep_min_version = get_min_sdk_version(ctx).min_sdk_version
-    apex_min_version = ctx.attr._min_sdk_version[BuildSettingInfo].value
-    if dep_min_version and _compare_sdk_version(apex_min_version, dep_min_version) < 0:
+    apex_min_version = parse_apex_sdk_version(ctx.attr._min_sdk_version[BuildSettingInfo].value)
+    if dep_min_version and apex_min_version < dep_min_version:
         fail("The apex %s's min_sdk_version %s cannot be lower than the dep's min_sdk_version %s" %
              (ctx.attr._apex_name[BuildSettingInfo].value, apex_min_version, dep_min_version))
 
@@ -129,6 +152,7 @@ def _apex_cc_aspect_impl(target, ctx):
 
     provides = []
     requires = []
+    make_modules_to_install = []
 
     # The APEX manifest records the stub-providing libs (ABI-stable) in its
     # direct and transitive deps.
@@ -143,7 +167,7 @@ def _apex_cc_aspect_impl(target, ctx):
             # Mark this target as "stub-providing" exports of this APEX,
             # which the system and other APEXes can depend on, and propagate
             # this list.
-            provides += [target.label]
+            provides.append(target.label)
         else:
             # If this is not a direct dep, and stubs are available, don't
             # propagate the libraries. Mark this target as required from the
@@ -153,12 +177,18 @@ def _apex_cc_aspect_impl(target, ctx):
 
             # If a stub library is in the "provides" of the apex, it doesn't need to be in the "requires"
             if not is_apex_direct_dep(source_library, ctx):
-                requires += [target[CcStubLibrarySharedInfo].source_library.label]
+                requires.append(source_library.label)
+                if not _installed_to_bootstrap(source_library.label):
+                    # It's sufficient to pass the make module name, not the fully qualified bazel label.
+                    make_modules_to_install.append(source_library.label.name)
             return [
                 ApexCcInfo(
                     transitive_shared_libs = depset(),
                     requires_native_libs = depset(direct = requires),
                     provides_native_libs = depset(direct = provides),
+                ),
+                ApexCcMkInfo(
+                    make_modules_to_install = depset(direct = make_modules_to_install),
                 ),
             ]
 
@@ -215,14 +245,29 @@ def _apex_cc_aspect_impl(target, ctx):
                 transitive = [info[ApexCcInfo].provides_native_libs for info in transitive_deps],
             ),
         ),
+        ApexCcMkInfo(
+            make_modules_to_install = depset(
+                [],
+                transitive = [info[ApexCcMkInfo].make_modules_to_install for info in transitive_deps],
+            ),
+        ),
     ]
 
 # The list of attributes in a cc dep graph where this aspect will traverse on.
-CC_ATTR_ASPECTS = ["dynamic_deps", "deps", "shared", "src", "runtime_deps"]
+CC_ATTR_ASPECTS = [
+    "dynamic_deps",
+    "deps",
+    "shared",
+    "src",
+    "runtime_deps",
+    "static_deps",
+    "whole_archive_deps",
+]
 
 # This aspect is intended to be applied on a apex.native_shared_libs attribute
 apex_cc_aspect = aspect(
     implementation = _apex_cc_aspect_impl,
+    provides = [ApexCcInfo, ApexCcMkInfo],
     attrs = {
         "_apex_name": attr.label(default = "//build/bazel/rules/apex:apex_name"),
         "_apex_direct_deps": attr.label(default = "//build/bazel/rules/apex:apex_direct_deps"),

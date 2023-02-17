@@ -21,6 +21,7 @@ ApexInfo = provider(
         "requires_native_libs": "Labels of native shared libs that this apex requires.",
         "unsigned_output": "Unsigned .apex file.",
         "signed_output": "Signed .apex file.",
+        "signed_compressed_output": "Signed .capex file.",
         "bundle_key_info": "APEX bundle signing public/private key pair (the value of the key: attribute).",
         "container_key_info": "Info of the container key provided as AndroidAppCertificateInfo.",
         "package_name": "APEX package name.",
@@ -30,5 +31,12 @@ ApexInfo = provider(
         "installed_files": "File containing all files installed by the APEX",
         "base_file": "A zip file used to create aab files.",
         "base_with_config_zip": "A zip file used to create aab files within mixed builds.",
+    },
+)
+
+ApexMkInfo = provider(
+    "ApexMkInfo exports metadata about this apex for Android.mk integration / bundled builds.",
+    fields = {
+        "make_modules_to_install": "Make module names that should be installed to the system along with this APEX.",
     },
 )

@@ -21,6 +21,7 @@ load("//build/bazel/rules/cc:cc_library_static.bzl", "cc_library_static")
 load("//build/bazel/rules/cc:cc_library_headers.bzl", "cc_library_headers")
 load("//build/bazel/rules/cc:cc_prebuilt_library_static.bzl", "cc_prebuilt_library_static")
 load("//build/bazel/rules/cc:cc_binary.bzl", "cc_binary")
+load(":cc_library_common_test.bzl", "target_provides_androidmk_info_test")
 load("//build/bazel/rules/test_common:paths.bzl", "get_output_and_package_dir_based_path", "get_package_dir_based_path")
 load("//build/bazel/rules/test_common:rules.bzl", "expect_failure_test")
 
@@ -379,6 +380,115 @@ def _cc_library_static_links_against_prebuilt_library():
 
     return test_name
 
+def _cc_library_static_linking_object_ordering_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    actions = analysistest.target_actions(env)
+
+    asserts.equals(env, 1, len(actions), "Expected actions, got %s" % actions)
+
+    outputs = actions[0].outputs.to_list()
+    argv = actions[0].argv
+    asserts.equals(env, 4 + len(ctx.attr.expected_objects_in_order), len(argv))
+    asserts.equals(env, "crsPD", argv[1])
+    asserts.equals(env, outputs[0].path, argv[2])
+
+    for i in range(len(ctx.attr.expected_objects_in_order)):
+        obj = ctx.attr.expected_objects_in_order[i]
+        asserts.equals(env, obj, paths.basename(argv[3 + i]))
+
+    asserts.equals(env, "--format=gnu", argv[-1])
+
+    return analysistest.end(env)
+
+_cc_library_static_linking_object_ordering_test = analysistest.make(
+    _cc_library_static_linking_object_ordering_test_impl,
+    attrs = {
+        "expected_objects_in_order": attr.string_list(),
+    },
+)
+
+def _cc_library_static_whole_archive_deps_objects_precede_target_objects():
+    name = "_cc_library_static_whole_archive_deps_objects_precede_target_objects"
+    dep_name = name + "_dep"
+    test_name = name + "_test"
+
+    cc_library_static(
+        name = dep_name,
+        srcs = ["first.c"],
+        tags = ["manual"],
+    )
+
+    cc_library_static(
+        name = name,
+        srcs = ["second.c"],
+        whole_archive_deps = [dep_name],
+        tags = ["manual"],
+    )
+
+    _cc_library_static_linking_object_ordering_test(
+        name = test_name,
+        target_under_test = name,
+        expected_objects_in_order = [
+            "first.o",
+            "second.o",
+        ],
+    )
+
+    return test_name
+
+def _cc_library_static_provides_androidmk_info():
+    name = "cc_library_static_provides_androidmk_info"
+    dep_name = name + "_static_dep"
+    whole_archive_dep_name = name + "_whole_archive_dep"
+    dynamic_dep_name = name + "_dynamic_dep"
+    test_name = name + "_test"
+
+    cc_library_static(
+        name = dep_name,
+        srcs = ["foo.c"],
+        tags = ["manual"],
+    )
+    cc_library_static(
+        name = whole_archive_dep_name,
+        srcs = ["foo.c"],
+        tags = ["manual"],
+    )
+    cc_library_shared(
+        name = dynamic_dep_name,
+        srcs = ["foo.c"],
+        tags = ["manual"],
+    )
+    cc_library_static(
+        name = name,
+        srcs = ["foo.cc"],
+        deps = [dep_name],
+        whole_archive_deps = [whole_archive_dep_name],
+        dynamic_deps = [dynamic_dep_name],
+        tags = ["manual"],
+    )
+    android_test_name = test_name + "_android"
+    linux_test_name = test_name + "_linux"
+    target_provides_androidmk_info_test(
+        name = android_test_name,
+        target_under_test = name,
+        expected_static_libs = [dep_name, "libc++_static", "libc++demangle"],
+        expected_whole_static_libs = [whole_archive_dep_name],
+        expected_shared_libs = [dynamic_dep_name, "libc", "libdl", "libm"],
+        target_compatible_with = ["//build/bazel/platforms/os:android"],
+    )
+    target_provides_androidmk_info_test(
+        name = linux_test_name,
+        target_under_test = name,
+        expected_static_libs = [dep_name, "libc++_static"],
+        expected_whole_static_libs = [whole_archive_dep_name],
+        expected_shared_libs = [dynamic_dep_name],
+        target_compatible_with = ["//build/bazel/platforms/os:linux"],
+    )
+    return [
+        android_test_name,
+        linux_test_name,
+    ]
+
 def cc_library_static_test_suite(name):
     native.genrule(name = "hdr", cmd = "null", outs = ["f.h"], tags = ["manual"])
 
@@ -392,5 +502,9 @@ def cc_library_static_test_suite(name):
             _cc_library_static_does_not_propagate_implementation_whole_archive_deps(),
             _cc_library_static_does_not_propagate_implementation_dynamic_deps(),
             _cc_library_static_links_against_prebuilt_library(),
-        ] + _cc_rules_do_not_allow_absolute_includes(),
+            _cc_library_static_whole_archive_deps_objects_precede_target_objects(),
+        ] + (
+            _cc_rules_do_not_allow_absolute_includes() +
+            _cc_library_static_provides_androidmk_info()
+        ),
     )

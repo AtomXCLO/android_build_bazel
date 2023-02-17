@@ -19,7 +19,7 @@ load(":apex_info.bzl", "ApexInfo")
 load(":apex_available.bzl", "ApexAvailableInfo")
 load(":apex_key.bzl", "ApexKeyInfo")
 load(":cc.bzl", "get_min_sdk_version")
-load("//build/bazel/rules:common.bzl", "get_dep_targets")
+load("//build/bazel/rules:common.bzl", "get_dep_targets", "strip_bp2build_label_suffix")
 load("//build/bazel/rules/android:android_app_certificate.bzl", "AndroidAppCertificateInfo")
 
 ApexDepsInfo = provider(
@@ -45,6 +45,12 @@ _IGNORED_REPOSITORIES = [
     "bazel_tools",
 ]
 _IGNORED_RULE_KINDS = [
+    # No validation for language-agnostic aidl_library targets.
+    # aidl_library targets are included via cc_aidl_code_gen rule and
+    # apex_deps_validation aspect already validates against cc_aidl_code_gen targets
+    "aidl_library",
+    "string_list_setting",
+    "string_setting",
     # These rule kinds cannot be skipped by checking providers because most
     # targets have a License provider
     "_license",
@@ -54,6 +60,12 @@ _IGNORED_PROVIDERS = [
     AndroidAppCertificateInfo,
     ApexKeyInfo,
     ProtoInfo,
+]
+_IGNORED_ATTRS = [
+    "androidmk_static_deps",
+    "androidmk_whole_archive_deps",
+    "androidmk_dynamic_deps",
+    "androidmk_deps",
 ]
 
 def _should_skip_apex_dep(target, ctx):
@@ -70,8 +82,11 @@ def _should_skip_apex_dep(target, ctx):
 
 def _apex_dep_validation_aspect_impl(target, ctx):
     transitive_deps = []
-    for dep in get_dep_targets(ctx, predicate = lambda target: ApexDepsInfo in target):
-        transitive_deps.append(dep[ApexDepsInfo].transitive_deps)
+    for attr, attr_deps in get_dep_targets(ctx.rule.attr, predicate = lambda target: ApexDepsInfo in target).items():
+        if attr in _IGNORED_ATTRS:
+            continue
+        for dep in attr_deps:
+            transitive_deps.append(dep[ApexDepsInfo].transitive_deps)
 
     if _should_skip_apex_dep(target, ctx):
         return ApexDepsInfo(
@@ -134,21 +149,11 @@ apex_deps_validation_aspect = aspect(
     attrs = {
         "_apex_name": attr.label(default = "//build/bazel/rules/apex:apex_name"),
         "_base_apex_name": attr.label(default = "//build/bazel/rules/apex:base_apex_name"),
+        "_direct_deps": attr.label(default = "//build/bazel/rules/apex:apex_direct_deps"),
     },
     required_aspect_providers = [ApexAvailableInfo],
     provides = [ApexDepsInfo],
 )
-
-_BP2BUILD_LABEL_SUFFIXES = [
-    # cc rules
-    "_bp2build_cc_library_static",
-    "_cc_proto_lite",
-]
-
-def _strip_bp2build_label_suffix(name):
-    for suffix in _BP2BUILD_LABEL_SUFFIXES:
-        name = name.removesuffix(suffix)
-    return name
 
 def _min_sdk_version_string(version):
     if version.apex_inherit:
@@ -159,7 +164,7 @@ def _min_sdk_version_string(version):
 
 def _apex_dep_to_string(apex_dep_info):
     return "{name}(minSdkVersion:{min_sdk_version})".format(
-        name = _strip_bp2build_label_suffix(apex_dep_info.label.name),
+        name = strip_bp2build_label_suffix(apex_dep_info.label.name),
         min_sdk_version = _min_sdk_version_string(apex_dep_info.min_sdk_version),
     )
 
@@ -209,7 +214,7 @@ def validate_apex_deps(ctx, transitive_deps, allowed_deps_manifest):
             touch {validation_marker};
         else
             echo -e "\n******************************";
-            echo "ERROR: go/apex-allowed-deps-error";
+            echo "ERROR: go/apex-allowed-deps-error contains more information";
             echo "******************************";
             echo "Detected changes to allowed dependencies in updatable modules.";
             echo "There are $diff_size dependencies of APEX {target_label} on modules not in {allowed_deps_manifest}:";
@@ -218,10 +223,10 @@ def validate_apex_deps(ctx, transitive_deps, allowed_deps_manifest):
             echo -e "$ (croot && packages/modules/common/build/update-apex-allowed-deps.sh)\n";
             echo "When submitting the generated CL, you must include the following information";
             echo "in the commit message if you are adding a new dependency:";
-            echo "Apex-Size-Increase:";
-            echo "Previous-Platform-Support:";
-            echo "Aosp-First:";
-            echo "Test-Info:";
+            echo "Apex-Size-Increase: Expected binary size increase for affected APEXes (or the size of the .jar / .so file of the new library)";
+            echo "Previous-Platform-Support: Are the maintainers of the new dependency committed to supporting previous platform releases?";
+            echo "Aosp-First: Is the new dependency being developed AOSP-first or internal?";
+            echo "Test-Info: What’s the testing strategy for the new dependency? Does it have its own tests, and are you adding integration tests? How/when are the tests run?";
             echo "You do not need OWNERS approval to submit the change, but mainline-modularization@";
             echo "will periodically review additions and may require changes.";
             echo -e "******************************\n";

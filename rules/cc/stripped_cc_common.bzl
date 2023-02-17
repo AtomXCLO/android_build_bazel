@@ -17,6 +17,8 @@ limitations under the License.
 """A macro to handle shared library stripping."""
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+load(":cc_library_common.bzl", "CcAndroidMkInfo")
+load(":clang_tidy.bzl", "collect_deps_clang_tidy_info")
 
 CcUnstrippedInfo = provider(
     "Provides unstripped binary/shared library",
@@ -188,7 +190,13 @@ def _stripped_binary_impl(ctx):
         ctx.attr.src[DebugPackageInfo],
         ctx.attr.src[OutputGroupInfo],
         StrippedCcBinaryInfo(),  # a marker for dependents
-        CcUnstrippedInfo(unstripped = ctx.attr.unstripped),
+        CcUnstrippedInfo(
+            unstripped = ctx.attr.unstripped,
+        ),
+        collect_deps_clang_tidy_info(ctx),
+    ] + [
+        d[CcAndroidMkInfo]
+        for d in ctx.attr.androidmk_deps
     ]
 
     out_file = stripped_impl(ctx, suffix = ctx.attr.suffix)
@@ -200,22 +208,34 @@ def _stripped_binary_impl(ctx):
         ),
     ] + common_providers
 
+_rule_attrs = dict(
+    common_strip_attrs,
+    src = attr.label(mandatory = True, allow_single_file = True, providers = [CcInfo]),
+    runtime_deps = attr.label_list(
+        providers = [CcInfo],
+        doc = "Deps that should be installed along with this target. Read by the apex cc aspect.",
+    ),
+    androidmk_deps = attr.label_list(
+        providers = [CcAndroidMkInfo],
+    ),
+    suffix = attr.string(),
+    unstripped = attr.label(
+        mandatory = True,
+        allow_single_file = True,
+        doc = "Unstripped binary to be returned by ",
+    ),
+)
+
 stripped_binary = rule(
     implementation = _stripped_binary_impl,
-    attrs = dict(
-        common_strip_attrs,
-        src = attr.label(mandatory = True, allow_single_file = True, providers = [CcInfo]),
-        runtime_deps = attr.label_list(
-            providers = [CcInfo],
-            doc = "Deps that should be installed along with this target. Read by the apex cc aspect.",
-        ),
-        suffix = attr.string(),
-        unstripped = attr.label(
-            mandatory = True,
-            allow_single_file = True,
-            doc = "Unstripped binary to be returned by ",
-        ),
-    ),
+    attrs = _rule_attrs,
     executable = True,
+    toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
+)
+
+stripped_test = rule(
+    implementation = _stripped_binary_impl,
+    attrs = _rule_attrs,
+    test = True,
     toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
 )
