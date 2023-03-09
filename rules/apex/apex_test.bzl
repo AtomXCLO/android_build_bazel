@@ -2232,6 +2232,280 @@ def _test_directly_included_stubs_lib_with_indirectly_static_variant():
 
     return test_name
 
+def cc_library_shared_with_stubs(name):
+    cc_library_shared(
+        name = name,
+        system_dynamic_deps = [],
+        stl = "none",
+        tags = ["manual"],
+        stubs_symbol_file = name + ".map.txt",
+    )
+
+    native.genrule(
+        name = name + "_genrule_map_txt",
+        outs = [name + ".map.txt"],
+        cmd = "touch $@",
+        tags = ["manual"],
+    )
+
+    cc_stub_suite(
+        name = name + "_stub_libs",
+        soname = name + ".so",
+        source_library = ":" + name,
+        symbol_file = name + ".map.txt",
+        versions = ["30"],
+        tags = ["manual"],
+    )
+
+    return [
+        name,
+        name + "_stub_libs",
+    ]
+
+def _apex_in_unbundled_build_test(ctx):
+    env = analysistest.begin(ctx)
+    target_under_test = analysistest.target_under_test(env)
+    mk_modules_to_install = target_under_test[ApexMkInfo].make_modules_to_install
+    asserts.true(
+        env,
+        "apex_in_unbundled_build_libfoo" not in mk_modules_to_install,
+        "stub libs apex_in_unbundled_build_libfoo should not be propagated " +
+        "to make for installation in unbundled mode",
+    )
+    return analysistest.end(env)
+
+apex_in_unbundled_build_test = analysistest.make(
+    _apex_in_unbundled_build_test,
+    config_settings = {
+        "@//build/bazel/rules/apex:unbundled_build": True,
+    },
+)
+
+def _test_apex_in_unbundled_build():
+    name = "apex_in_unbundled_build"
+    test_name = name + "_test"
+
+    [cc_library_shared_name, cc_stub_suite_name] = cc_library_shared_with_stubs(name + "_libfoo")
+
+    cc_binary(
+        name = name + "_bar",
+        tags = [
+            "apex_available=" + name,
+            "apex_available_checked_manual_for_testing",
+            "manual",
+        ],
+        dynamic_deps = select({
+            "//build/bazel/rules/apex:android-in_apex": [cc_stub_suite_name + "_current"],
+            "//build/bazel/rules/apex:android-non_apex": [cc_library_shared_name],
+        }),
+    )
+
+    test_apex(
+        name = name,
+        binaries = [name + "_bar"],
+    )
+
+    apex_in_unbundled_build_test(
+        name = test_name,
+        target_under_test = name,
+    )
+
+    return test_name
+
+def _apex_in_bundled_build_test(ctx):
+    env = analysistest.begin(ctx)
+    target_under_test = analysistest.target_under_test(env)
+    mk_modules_to_install = target_under_test[ApexMkInfo].make_modules_to_install
+    asserts.true(
+        env,
+        "apex_in_bundled_build_libfoo" in mk_modules_to_install,
+        "stub libs apex_in_unbundled_build_libfoo should be propagated " +
+        "to make for installation in unbundled mode",
+    )
+
+    return analysistest.end(env)
+
+apex_in_bundled_build_test = analysistest.make(
+    _apex_in_bundled_build_test,
+    config_settings = {
+        "@//build/bazel/rules/apex:unbundled_build": False,
+    },
+)
+
+def _test_apex_in_bundled_build():
+    name = "apex_in_bundled_build"
+    test_name = name + "_test"
+
+    [cc_library_shared_name, cc_stub_suite_name] = cc_library_shared_with_stubs(name + "_libfoo")
+
+    cc_binary(
+        name = name + "_bar",
+        tags = [
+            "apex_available=" + name,
+            "apex_available_checked_manual_for_testing",
+            "manual",
+        ],
+        dynamic_deps = select({
+            "//build/bazel/rules/apex:android-in_apex": [cc_stub_suite_name + "_current"],
+            "//build/bazel/rules/apex:android-non_apex": [cc_library_shared_name],
+        }),
+    )
+
+    test_apex(
+        name = name,
+        binaries = [name + "_bar"],
+    )
+
+    apex_in_bundled_build_test(
+        name = test_name,
+        target_under_test = name,
+    )
+
+    return test_name
+
+def _apex_compression_test(ctx):
+    env = analysistest.begin(ctx)
+
+    target = analysistest.target_under_test(env)
+    asserts.true(
+        env,
+        target[ApexInfo].signed_compressed_output != None,
+        "ApexInfo.signed_compressed_output should exist from compressible apex",
+    )
+
+    return analysistest.end(env)
+
+apex_compression_test = analysistest.make(
+    _apex_compression_test,
+    config_settings = {
+        "@//build/bazel/rules/apex:compression_enabled": True,
+    },
+)
+
+def _test_apex_compression():
+    name = "apex_compression"
+    test_name = name + "_test"
+
+    test_apex(
+        name = name,
+        compressible = True,
+    )
+
+    apex_compression_test(
+        name = test_name,
+        target_under_test = name,
+    )
+
+    return test_name
+
+def _apex_no_compression_test(ctx):
+    env = analysistest.begin(ctx)
+
+    target = analysistest.target_under_test(env)
+    asserts.true(
+        env,
+        target[ApexInfo].signed_compressed_output == None,
+        "ApexInfo.signed_compressed_output should not exist when compression_enabled is not specified",
+    )
+
+    return analysistest.end(env)
+
+apex_no_compression_test = analysistest.make(
+    _apex_no_compression_test,
+    config_settings = {
+        "@//build/bazel/rules/apex:compression_enabled": False,
+    },
+)
+
+def _test_apex_no_compression():
+    name = "apex_no_compression"
+    test_name = name + "_test"
+
+    test_apex(
+        name = name,
+    )
+
+    apex_no_compression_test(
+        name = test_name,
+        target_under_test = name,
+    )
+
+    return test_name
+
+def _min_target_sdk_version_api_fingerprint_test(ctx):
+    env = analysistest.begin(ctx)
+    actions = analysistest.target_actions(env)
+
+    apexer_action = None
+    for action in actions:
+        if action.argv == None:
+            continue
+        if "--min_sdk_version" in action.argv:
+            apexer_action = action
+            break
+
+    asserts.true(
+        env,
+        apexer_action != None,
+        "There is no apexer action in all the actions",
+    )
+
+    argv = apexer_action.argv
+    api_fingerprint_in_input = False
+    api_fingerprint_path = None
+    for f in apexer_action.inputs.to_list():
+        if f.basename == "api_fingerprint.txt":
+            api_fingerprint_in_input = True
+            api_fingerprint_path = f.path
+            break
+
+    asserts.true(
+        env,
+        api_fingerprint_in_input,
+        "api_fingerprint.txt is not in the input files",
+    )
+
+    expected_sdk_version = "123" + ".$$(cat {})".format(api_fingerprint_path)
+    asserts.equals(
+        env,
+        expected = expected_sdk_version,
+        actual = argv[argv.index("--min_sdk_version") + 1],
+    )
+
+    asserts.equals(
+        env,
+        expected = expected_sdk_version,
+        actual = argv[argv.index("--target_sdk_version") + 1],
+    )
+
+    return analysistest.end(env)
+
+min_target_sdk_version_api_fingerprint_test = analysistest.make(
+    _min_target_sdk_version_api_fingerprint_test,
+    config_settings = {
+        "@//build/bazel/rules/apex:unbundled_build": True,
+        "@//build/bazel/rules/apex:always_use_prebuilt_sdks": False,
+        "@//build/bazel/rules/apex:unbundled_build_target_sdk_with_api_fingerprint": True,
+        "@//build/bazel/rules/apex:platform_sdk_codename": "123",
+    },
+)
+
+def _test_min_target_sdk_version_api_fingerprint():
+    name = "min_target_sdk_version_api_fingerprint"
+    test_name = name + "_test"
+
+    test_apex(
+        name = name,
+        min_sdk_version = "current",
+    )
+
+    min_target_sdk_version_api_fingerprint_test(
+        name = test_name,
+        target_under_test = name,
+    )
+
+    return test_name
+
 def apex_test_suite(name):
     native.test_suite(
         name = name,
@@ -2279,5 +2553,10 @@ def apex_test_suite(name):
             _test_apex_deps_validation(),
             _test_no_static_linking_for_stubs_lib(),
             _test_directly_included_stubs_lib_with_indirectly_static_variant(),
+            _test_apex_in_unbundled_build(),
+            _test_apex_in_bundled_build(),
+            _test_apex_compression(),
+            _test_apex_no_compression(),
+            _test_min_target_sdk_version_api_fingerprint(),
         ] + _test_apex_transition(),
     )

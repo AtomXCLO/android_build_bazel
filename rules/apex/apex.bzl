@@ -1,18 +1,16 @@
-"""
-Copyright (C) 2021 The Android Open Source Project
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-"""
+# Copyright (C) 2021 The Android Open Source Project
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 load("//build/bazel/platforms:platform_utils.bzl", "platforms")
 load("//build/bazel/rules/android:android_app_certificate.bzl", "AndroidAppCertificateInfo", "android_app_certificate_with_default_cert")
@@ -84,7 +82,7 @@ def _create_file_mapping(ctx):
         _add_lib_files("lib64", ctx.attr.native_shared_libs_64)
 
         # TODO(b/269577299): Make this read from //build/bazel/product_config:product_vars instead.
-        if product_vars["DeviceSecondaryArch"] != "":
+        if ctx.attr._device_secondary_arch[BuildSettingInfo].value != "":
             _add_lib_files("lib", ctx.attr.native_shared_libs_32)
     else:
         _add_lib_files("lib", ctx.attr.native_shared_libs_32)
@@ -327,6 +325,15 @@ def _generate_notices(ctx, apex_toolchain):
     )
     return notice_file
 
+def _use_api_fingerprint(ctx):
+    if not ctx.attr._unbundled_build[BuildSettingInfo].value:
+        return False
+    if ctx.attr._always_use_prebuilt_sdks[BuildSettingInfo].value:
+        return False
+    if not ctx.attr._unbundled_build_target_sdk_with_api_fingerprint[BuildSettingInfo].value:
+        return False
+    return True
+
 # apexer - generate the APEX file.
 def _run_apexer(ctx, apex_toolchain):
     # Inputs
@@ -341,6 +348,7 @@ def _run_apexer(ctx, apex_toolchain):
     full_apex_manifest_json = _add_apex_manifest_information(ctx, apex_toolchain, requires_native_libs, provides_native_libs)
     apex_manifest_pb = _convert_apex_manifest_json_to_pb(ctx, apex_toolchain, full_apex_manifest_json)
     notices_file = _generate_notices(ctx, apex_toolchain)
+    api_fingerprint_file = None
 
     file_mapping_file = ctx.actions.declare_file(ctx.attr.name + "_apex_file_mapping.json")
     ctx.actions.write(file_mapping_file, json.encode({k: v.path for k, v in file_mapping.items()}))
@@ -383,8 +391,15 @@ def _run_apexer(ctx, apex_toolchain):
     if ctx.attr.logging_parent:
         args.add_all(["--logging_parent", ctx.attr.logging_parent])
 
-    # TODO(b/243393960): Support API fingerprinting for APEXes for pre-release SDKs.
-    args.add_all(["--target_sdk_version", default_app_target_sdk()])
+    use_api_fingerprint = _use_api_fingerprint(ctx)
+
+    target_sdk_version = default_app_target_sdk()
+    if use_api_fingerprint:
+        api_fingerprint_file = ctx.file._api_fingerprint_txt
+        sdk_version_suffix = ".$$(cat {})".format(api_fingerprint_file.path)
+        target_sdk_version = ctx.attr._platform_sdk_codename[BuildSettingInfo].value + sdk_version_suffix
+        args.add(api_fingerprint_file.path)
+    args.add_all(["--target_sdk_version", target_sdk_version])
 
     # TODO(b/215339575): This is a super rudimentary way to convert "current" to a numerical number.
     # Generalize this to API level handling logic in a separate Starlark utility, preferably using
@@ -396,7 +411,9 @@ def _run_apexer(ctx, apex_toolchain):
     override_min_sdk_version = ctx.attr._apex_global_min_sdk_version_override[BuildSettingInfo].value
     min_sdk_version = maybe_override_min_sdk_version(min_sdk_version, override_min_sdk_version)
 
-    # TODO(b/243393960): Support API fingerprinting for APEXes for pre-release SDKs.
+    if use_api_fingerprint:
+        min_sdk_version = ctx.attr._platform_sdk_codename[BuildSettingInfo].value + sdk_version_suffix
+        args.add(api_fingerprint_file.path)
     args.add_all(["--min_sdk_version", min_sdk_version])
 
     # apexer needs the list of directories containing all auxilliary tools invoked during
@@ -439,6 +456,8 @@ def _run_apexer(ctx, apex_toolchain):
         pubkey,
         android_jar,
     ] + file_mapping.values()
+    if use_api_fingerprint:
+        inputs.append(api_fingerprint_file)
 
     if android_manifest != None:
         inputs.append(android_manifest)
@@ -496,6 +515,14 @@ def _run_signapk(ctx, unsigned_file, signed_file, private_key, public_key, mnemo
     )
 
     return signed_file
+
+# https://cs.android.com/android/platform/superproject/+/master:build/soong/android/config.go;drc=5ca657189aac546af0aafaba11bbc9c5d889eab3;l=1501
+# In Soong, we don't check whether the current apex is part of Unbundled_apps.
+# Hence, we might simplify the logic by just checking product_vars["Unbundled_build"]
+# TODO(b/271474456): Eventually we might default to unbundled mode in bazel-only mode
+# so that we don't need to check Unbundled_apps.
+def compression_enabled():
+    return product_vars.get("CompressedApex", False) and len(product_vars.get("Unbundled_apps", [])) == 0
 
 # Compress a file with apex_compression_tool.
 def _run_apex_compression_tool(ctx, apex_toolchain, input_file, output_file_name):
@@ -637,7 +664,7 @@ def _apex_rule_impl(ctx):
 
     _run_signapk(ctx, unsigned_apex, signed_apex, private_key, public_key, "BazelApexSigning")
 
-    if ctx.attr.compressible:
+    if ctx.attr.compressible and ctx.attr._compression_enabled[BuildSettingInfo].value:
         compressed_apex_output_file = _run_apex_compression_tool(ctx, apex_toolchain, signed_apex, ctx.attr.name + ".capex.unsigned")
         signed_capex = ctx.outputs.capex_output
         _run_signapk(ctx, compressed_apex_output_file, signed_capex, private_key, public_key, "BazelCompressedApexSigning")
@@ -645,12 +672,19 @@ def _apex_rule_impl(ctx):
     apex_key_info = ctx.attr.key[ApexKeyInfo]
 
     arch = platforms.get_target_arch(ctx.attr._platform_utils)
-    zip_files = apex_zip_files(actions = ctx.actions, name = ctx.label.name, tools = struct(
-        aapt2 = apex_toolchain.aapt2,
-        zip2zip = ctx.executable._zip2zip,
-        merge_zips = ctx.executable._merge_zips,
-        soong_zip = apex_toolchain.soong_zip,
-    ), apex_file = signed_apex, arch = arch)
+    zip_files = apex_zip_files(
+        actions = ctx.actions,
+        name = ctx.label.name,
+        tools = struct(
+            aapt2 = apex_toolchain.aapt2,
+            zip2zip = ctx.executable._zip2zip,
+            merge_zips = ctx.executable._merge_zips,
+            soong_zip = apex_toolchain.soong_zip,
+        ),
+        apex_file = signed_apex,
+        arch = arch,
+        secondary_arch = ctx.attr._device_secondary_arch[BuildSettingInfo].value,
+    )
 
     transitive_apex_deps, transitive_unvalidated_targets_output_file, apex_deps_validation_files = _validate_apex_deps(ctx)
 
@@ -810,6 +844,32 @@ When not set, defaults to 10000 (or "current").""",
             default = "//build/bazel/rules/apex:apex_global_min_sdk_version_override",
             doc = "If specified, override the min_sdk_version of this apex and in the transition and checks for dependencies.",
         ),
+        "_device_secondary_arch": attr.label(
+            default = "//build/bazel/rules/apex:device_secondary_arch",
+            doc = "If specified, also include the libraries from the secondary arch.",
+        ),
+        "_compression_enabled": attr.label(
+            default = "//build/bazel/rules/apex:compression_enabled",
+            doc = "If specified along with compressible attribute, run compression tool.",
+        ),
+
+        # Api_fingerprint
+        "_unbundled_build": attr.label(
+            default = "//build/bazel/rules/apex:unbundled_build",
+        ),
+        "_always_use_prebuilt_sdks": attr.label(
+            default = "//build/bazel/rules/apex:always_use_prebuilt_sdks",
+        ),
+        "_unbundled_build_target_sdk_with_api_fingerprint": attr.label(
+            default = "//build/bazel/rules/apex:unbundled_build_target_sdk_with_api_fingerprint",
+        ),
+        "_platform_sdk_codename": attr.label(
+            default = "//build/bazel/rules/apex:platform_sdk_codename",
+        ),
+        "_api_fingerprint_txt": attr.label(
+            default = "//frameworks/base/api:api_fingerprint",
+            allow_single_file = True,
+        ),
     },
     # The apex toolchain is not mandatory so that we don't get toolchain resolution errors even
     # when the apex is not compatible with the current target (via target_compatible_with).
@@ -854,7 +914,8 @@ def apex(
 
     apex_output = name + ".apex"
     capex_output = None
-    if compressible:
+
+    if compressible and compression_enabled():
         capex_output = name + ".capex"
 
     if certificate and certificate_name:
