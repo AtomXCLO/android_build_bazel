@@ -42,7 +42,7 @@ MAX_RUN_COUNT: Final[int] = 5
 
 @functools.cache
 def _prepare_env() -> (Mapping[str, str], str):
-  env = {**os.environ}
+  env = os.environ.copy()
   # TODO: Switch to oriole when it works
   default_product: Final[str] = 'cf_x86_64_phone' \
     if util.get_top_dir().joinpath('vendor/google/build').exists() \
@@ -211,7 +211,8 @@ def main():
           if cuj_group != cuj_catalog.Warmup:
             stop_building = True
             logs_dir_for_ci = user_input.log_dir.parent.joinpath('logs')
-            perf_metrics.archive_run(logs_dir_for_ci, build_info)
+            if logs_dir_for_ci.exists():
+              perf_metrics.archive_run(logs_dir_for_ci, build_info)
         perf_metrics.archive_run(run_dir, build_info)
         if build_info['actions'] == 0:
           # build has stabilized
@@ -227,8 +228,9 @@ def main():
     run_cuj_group(cuj_catalog.Warmup)
     for i in user_input.chosen_cujgroups:
       run_cuj_group(cuj_catalog.get_cujgroups()[i])
+
   perf_metrics.tabulate_metrics_csv(user_input.log_dir)
-  perf_metrics.display_tabulated_metrics(user_input.log_dir)
+  perf_metrics.display_tabulated_metrics(user_input.log_dir, user_input.ci_mode)
   pretty.summarize_metrics(user_input.log_dir)
   pretty.display_summarized_metrics(user_input.log_dir)
 
