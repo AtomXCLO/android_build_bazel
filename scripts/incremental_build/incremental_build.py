@@ -21,6 +21,7 @@ import datetime
 import functools
 import hashlib
 import itertools
+import json
 import logging
 import os
 import subprocess
@@ -87,6 +88,7 @@ BuildInfo = dict[str, any]
 
 def _build(build_type: ui.BuildType, run_dir: Path) -> (int, BuildInfo):
   logfile = run_dir.joinpath('output.txt')
+  run_dir.mkdir(parents=True, exist_ok=False)
   logging.info('TIP: to see the log:\n  tail -f "%s"', logfile)
   cmd = [*build_type.value, *ui.get_user_input().targets]
   logging.info('Command: %s', cmd)
@@ -138,7 +140,6 @@ def _build(build_type: ui.BuildType, run_dir: Path) -> (int, BuildInfo):
 
 def _run_cuj(run_dir: Path, build_type: ui.BuildType,
     cujstep: cuj_catalog.CujStep, desc: str, run) -> BuildInfo:
-  run_dir.mkdir(parents=True, exist_ok=False)
   (exit_code, build_info) = _build(build_type, run_dir)
   # if build was successful, run test
   if exit_code != 0:
@@ -157,8 +158,6 @@ def _run_cuj(run_dir: Path, build_type: ui.BuildType,
                  'description': log_desc,
                  'build_result': build_result
                } | build_info
-  logging.info('%s after %s: %s',
-               build_info["build_result"], build_info["time"], log_desc)
   return build_info
 
 
@@ -205,6 +204,7 @@ def main():
           break
         run_dir = next(run_dir_gen)
         build_info = _run_cuj(run_dir, build_type, cujstep, desc, run)
+        logging.info(json.dumps(build_info,indent=2))
         if user_input.ci_mode:
           if build_info['build_result'] == 'FAILED':
             sys.exit('Failed CI build runs detected!')
@@ -214,6 +214,8 @@ def main():
             if logs_dir_for_ci.exists():
               perf_metrics.archive_run(logs_dir_for_ci, build_info)
         perf_metrics.archive_run(run_dir, build_info)
+        perf_metrics.tabulate_metrics_csv(user_input.log_dir)
+        pretty.summarize_metrics(user_input.log_dir)
         if build_info['actions'] == 0:
           # build has stabilized
           break
@@ -229,9 +231,7 @@ def main():
     for i in user_input.chosen_cujgroups:
       run_cuj_group(cuj_catalog.get_cujgroups()[i])
 
-  perf_metrics.tabulate_metrics_csv(user_input.log_dir)
   perf_metrics.display_tabulated_metrics(user_input.log_dir, user_input.ci_mode)
-  pretty.summarize_metrics(user_input.log_dir)
   pretty.display_summarized_metrics(user_input.log_dir)
 
 
