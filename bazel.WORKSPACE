@@ -62,6 +62,12 @@ local_repository(
     path = "external/bazelbuild-rules_license",
 )
 
+local_repository(
+    name = "rules_python",
+    # TODO(b/200202912): Re-route this when rules_python is pulled into AOSP.
+    path = "build/bazel_common_rules/rules/python/stubs",
+)
+
 register_toolchains(
     "//prebuilts/build-tools:py_toolchain",
 
@@ -119,6 +125,25 @@ local_repository(
 local_repository(
     name = "remote_java_tools_linux",
     path = "prebuilts/bazel/linux-x86_64/remote_java_tools_linux",
+)
+
+# TODO(b/253667328): the below 3 repositories are all pointed to shim
+# repositories with targets that will cause failures if they are
+# actually depended on. Eventually we should properly vendor these
+# repositories.
+local_repository(
+    name = "remote_java_tools_darwin_x86_64",
+    path = "prebuilts/bazel/darwin-x86_64/remote_java_tools_darwin",
+)
+
+local_repository(
+    name = "remote_java_tools_darwin_arm64",
+    path = "prebuilts/bazel/darwin-x86_64/remote_java_tools_darwin",
+)
+
+local_repository(
+    name = "remote_java_tools_windows",
+    path = "prebuilts/bazel/darwin-x86_64/remote_java_tools_darwin",
 )
 
 # The following repository contains android_tools prebuilts.

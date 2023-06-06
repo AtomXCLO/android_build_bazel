@@ -18,6 +18,12 @@ package(default_package_metadata = [":default_metadata_file"])
 metadata(name = "default_metadata_file")
 
 string_setting(
+    name = "api_domain",
+    build_setting_default = "system",
+    visibility = ["//visibility:public"],
+)
+
+string_setting(
     name = "apex_name",
     build_setting_default = "",
     visibility = ["//visibility:public"],
@@ -46,6 +52,17 @@ bool_setting(
     name = "within_apex",
     build_setting_default = False,
     visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "system",
+    constraint_values = [
+        constants.ArchVariantToConstraints["android"],
+    ],
+    flag_values = {
+        ":api_domain": "system",
+        ":within_apex": "False",
+    },
 )
 
 config_setting(

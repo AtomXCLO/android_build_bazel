@@ -18,7 +18,8 @@ load("//build/bazel/rules/common:api.bzl", "api")
 load(":cc_library_headers.bzl", "cc_library_headers")
 load(":cc_library_shared.bzl", "CcStubLibrariesInfo")
 load(":cc_library_static.bzl", "cc_library_static")
-load(":fdo_profile_transitions.bzl", "drop_fdo_profile_transition")
+load(":composed_transitions.bzl", "drop_lto_and_fdo_profile_incoming_transition")
+load(":fdo_profile_transitions.bzl", "FDO_PROFILE_ATTR_KEY")
 load(":generate_toc.bzl", "CcTocInfo", "generate_toc")
 
 # This file contains the implementation for the cc_stub_library rule.
@@ -81,6 +82,7 @@ def _cc_stub_gen_impl(ctx):
 cc_stub_gen = rule(
     implementation = _cc_stub_gen_impl,
     attrs = {
+        FDO_PROFILE_ATTR_KEY: attr.label(),
         # Public attributes
         "symbol_file": attr.label(mandatory = True, allow_single_file = [".map.txt"]),
         "version": attr.string(mandatory = True, default = "current"),
@@ -191,7 +193,14 @@ def _cc_stub_library_shared_impl(ctx):
         ctx.attr.root[CcInfo],
         CcInfo(compilation_context = compilation_context),
     ])
-    toc_info = generate_toc(ctx, ctx.attr.name, ctx.attr.library_target.files.to_list()[0])
+
+    library_target_so_files = ctx.attr.library_target.files.to_list()
+    if len(library_target_so_files) != 1:
+        fail("expected single .so output file from library_target (%s); got %s" % (
+            ctx.attr.library_target.label,
+            library_target_so_files,
+        ))
+    toc_info = generate_toc(ctx, ctx.attr.name, library_target_so_files[0])
 
     return [
         ctx.attr.library_target[DefaultInfo],
@@ -209,8 +218,10 @@ _cc_stub_library_shared = rule(
     doc = "Top level rule to merge CcStubInfo and CcSharedLibraryInfo into a single target",
     # Incoming transition to reset //command_line_option:fdo_profile to None
     # to converge the configurations of the stub targets
-    cfg = drop_fdo_profile_transition,
+    # This also resets any lto transitions.
+    cfg = drop_lto_and_fdo_profile_incoming_transition,
     attrs = {
+        FDO_PROFILE_ATTR_KEY: attr.label(),
         "stub_target": attr.label(
             providers = [CcStubInfo],
             mandatory = True,
