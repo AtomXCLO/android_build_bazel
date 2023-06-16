@@ -17,6 +17,7 @@
 """
 A tool for running builds (soong or b) and measuring the time taken.
 """
+import dataclasses
 import datetime
 import functools
 import hashlib
@@ -38,7 +39,8 @@ import perf_metrics
 import pretty
 import ui
 import util
-from cuj import BuildResult
+from util import BuildInfo
+from util import BuildResult
 
 MAX_RUN_COUNT: Final[int] = 5
 
@@ -81,10 +83,7 @@ def _build_file_size(target_product: str) -> int:
   return os.path.getsize(build_file) if build_file.exists() else 0
 
 
-BuildInfo = dict[str, any]
-
-
-def _build(build_type: ui.BuildType, run_dir: Path) -> (int, BuildInfo):
+def _build(build_type: ui.BuildType, run_dir: Path) -> BuildInfo:
   logfile = run_dir.joinpath('output.txt')
   run_dir.mkdir(parents=True, exist_ok=False)
   cmd = [*build_type.value, *ui.get_user_input().targets]
@@ -139,14 +138,15 @@ def _build(build_type: ui.BuildType, run_dir: Path) -> (int, BuildInfo):
     action_count_delta = get_new_action_count(
         log=True, previous_count=action_count_before)
 
-  return (p.returncode, {
-      'build.ninja': _build_file_sha(target_product),
-      'build.ninja.size': _build_file_size(target_product),
-      'actions': action_count_delta,
-      'product': f'{target_product}-{env["TARGET_BUILD_VARIANT"]}',
-      'time': util.hhmmss(datetime.timedelta(microseconds=elapsed_ns / 1000),
-                          decimal_precision=True)
-  })
+  return BuildInfo(
+      actions=action_count_delta,
+      build_type=build_type,
+      build_result=BuildResult.FAILED if p.returncode else BuildResult.SUCCESS,
+      build_ninja_hash=_build_file_sha(target_product),
+      build_ninja_size=_build_file_size(target_product),
+      product=f'{target_product}-{env["TARGET_BUILD_VARIANT"]}',
+      time=datetime.timedelta(microseconds=elapsed_ns / 1000)
+  )
 
 
 def _run_cuj(run_dir: Path, build_type: ui.BuildType,
@@ -160,32 +160,31 @@ def _run_cuj(run_dir: Path, build_type: ui.BuildType,
       return 0.0
 
   cquery_ts = get_cquery_ts()
-  (exit_code, build_info) = _build(build_type, run_dir)
+  build_info = _build(build_type, run_dir)
   # if build was successful, run test
-  if exit_code != 0:
-    build_result = BuildResult.FAILED.name
-  else:
+  if build_info.build_result == BuildResult.SUCCESS:
     try:
       cujstep.verify()
-      build_result = BuildResult.SUCCESS.name
     except Exception as e:
       logging.error(e)
-      build_result = (BuildResult.TEST_FAILURE.name +
-                      ':' + str(e))
+      build_info = dataclasses.replace(
+          build_info,
+          build_result=BuildResult.TEST_FAILURE)
   if get_cquery_ts() > cquery_ts:
-    build_info['cquery.out.size'] = os.path.getsize(cquery_out)
+    cquery_out_size = os.path.getsize(cquery_out)
     shutil.copy(cquery_out, run_dir.joinpath('cquery.out'))
     cquery_profile = util.get_out_dir().joinpath(
         'bazel_metrics/cquery-buildroot_bazel_profile.gz')
     if cquery_profile.exists():
       shutil.copy(cquery_profile,
                   run_dir.joinpath('cquery-buildroot_bazel_profile.gz'))
+  else:
+    cquery_out_size = 0
 
-  build_info = {
-                   'build_result': build_result,
-                   'build_type': build_type.to_flag(),
-                   'targets': ' '.join(ui.get_user_input().targets)
-               } | build_info
+  build_info = dataclasses.replace(
+      build_info,
+      cquery_out_size=cquery_out_size,
+      targets=ui.get_user_input().targets)
   return build_info
 
 
@@ -218,6 +217,8 @@ def main():
 
   def run_cuj_group(cuj_group: cuj_catalog.CujGroup):
     nonlocal stop_building
+    metrics = user_input.log_dir.joinpath(util.METRICS_TABLE)
+    summary = user_input.log_dir.joinpath(util.SUMMARY_TABLE)
     for cujstep in cuj_group.steps:
       desc = cujstep.verb
       desc = f'{desc} {cuj_group.description}'.strip()
@@ -234,16 +235,17 @@ def main():
           break
         run_dir = next(run_dir_gen)
         build_info = _run_cuj(run_dir, build_type, cujstep)
-        build_info = build_info | {
-            'description': desc if run == 0 else f'rebuild-{run} after {desc}',
-            'warmup': cuj_group == cuj_catalog.Warmup,
-            'rebuild': run != 0
-        }
-        logging.info(json.dumps(build_info, indent=2))
+        build_info = dataclasses.replace(
+            build_info,
+            description=desc if run == 0 else f'rebuild-{run} after {desc}',
+            warmup=cuj_group == cuj_catalog.Warmup,
+            rebuild=run != 0)
+        logging.info(json.dumps(build_info, indent=2, cls=util.CustomEncoder))
         if user_input.ci_mode:
-          if build_info['build_result'] == 'FAILED':
-            sys.exit(
+          if build_info.build_result == BuildResult.FAILED:
+            logging.critical(
                 f'Failed CI build runs detected! Please see logs in: {run_dir}')
+            sys.exit(1)
           if cuj_group != cuj_catalog.Warmup:
             stop_building = True
             logs_dir_for_ci = user_input.log_dir.parent.joinpath('logs')
@@ -253,11 +255,12 @@ def main():
         # we are doing tabulation and summary after each run
         # so that we can look at intermediate results
         perf_metrics.tabulate_metrics_csv(user_input.log_dir)
-        pretty.summarize_metrics(user_input.log_dir)
+        with open(metrics, mode='rt') as mf, open(summary, mode='wt') as sf:
+          pretty.summarize_metrics(mf, sf)
         if run == 0:
           perf_metrics.display_tabulated_metrics(user_input.log_dir, user_input.ci_mode)
           pretty.display_summarized_metrics(user_input.log_dir)
-        if build_info['actions'] == 0:
+        if build_info.actions == 0:
           # build has stabilized
           break
         if run == MAX_RUN_COUNT - 1:
@@ -297,7 +300,7 @@ class ColoredLoggingFormatter(logging.Formatter):
     return formatter.format(record)
 
 
-if __name__ == '__main__':
+def configure_logger():
   eh = logging.StreamHandler(stream=sys.stderr)
   eh.setLevel(logging.WARNING)
   eh.setFormatter(ColoredLoggingFormatter())
@@ -308,4 +311,7 @@ if __name__ == '__main__':
   oh.setFormatter(ColoredLoggingFormatter())
   logging.getLogger().addHandler(oh)
 
+
+if __name__ == '__main__':
+  configure_logger()
   main()
