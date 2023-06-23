@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-import argparse
 # Copyright (C) 2022 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,6 +11,7 @@ import argparse
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import argparse
 import csv
 import datetime
 import itertools
@@ -59,14 +58,20 @@ def _acceptable(row: Row) -> bool:
 def _median_value(prop: str, rows: list[Row]) -> str:
   if not rows:
     return ''
-  vals = (x.get(prop) for x in rows)
-  vals = (x for x in vals if bool(x))
-  vals = list(util.period_to_seconds(x) for x in vals)
+  vals = [x.get(prop) for x in rows]
+  vals = [x for x in vals if bool(x)]
   if len(vals) == 0:
     return ''
-  cell = util.hhmmss(
-      datetime.timedelta(seconds=statistics.median(vals)),
-      decimal_precision=False)
+
+  isnum = sum(1 for x in vals if x.isnumeric()) == len(vals)
+  if isnum:
+    vals = [int(x) for x in vals]
+    cell = f'{(statistics.median(vals)):.0f}'
+  else:
+    vals = [util.period_to_seconds(x) for x in vals]
+    cell = util.hhmmss(datetime.timedelta(seconds=statistics.median(vals)),
+                       decimal_precision=False)
+
   if len(vals) > 1:
     cell = f'{cell}[N={len(vals)}]'
   return cell
