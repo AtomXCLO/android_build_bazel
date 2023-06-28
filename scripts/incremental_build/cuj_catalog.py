@@ -31,8 +31,9 @@ from cuj import CujStep
 from cuj import InWorkspace
 from cuj import Verifier
 from cuj import de_src
-from cuj import skip_when_soong_only
+from cuj import skip_for
 from cuj import src
+from util import BuildType
 
 """
 Provides some representative CUJs. If you wanted to manually run something but
@@ -195,14 +196,14 @@ def content_verfiers(
           return True
     return False
 
-  @skip_when_soong_only
+  @skip_for(BuildType.SOONG_ONLY)
   def contains():
     if not search():
       raise AssertionError(
           f'{de_src(ws_build_file)} expected to contain {content}')
     logging.info(f'VERIFIED {de_src(ws_build_file)} contains {content}')
 
-  @skip_when_soong_only
+  @skip_for(BuildType.SOONG_ONLY)
   def does_not_contain():
     if search():
       raise AssertionError(
@@ -363,7 +364,11 @@ def get_cujgroups() -> list[CujGroup]:
   return [
       CujGroup('', [CujStep('clean', clean)]),
       CujGroup('', Warmup.steps),
-      clone.get_cuj_group(src('packages/modules/adb/Android.bp'), 'adbd'),
+      clone.get_cuj_group(
+          src('packages/modules/adb/Android.bp'), 'adbd'),
+      clone.get_cuj_group(
+          src('packages/modules/NeuralNetworks/runtime/Android.bp'),
+          'libneuralnetworks'),
 
       create_delete(src('bionic/libc/tzcode/globbed.c'),
                     InWorkspace.UNDER_SYMLINK),
