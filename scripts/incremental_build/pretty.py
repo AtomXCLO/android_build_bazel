@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-import argparse
 # Copyright (C) 2022 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,6 +11,7 @@ import argparse
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import argparse
 import csv
 import datetime
 import itertools
@@ -59,14 +58,20 @@ def _acceptable(row: Row) -> bool:
 def _median_value(prop: str, rows: list[Row]) -> str:
   if not rows:
     return ''
-  vals = (x.get(prop) for x in rows)
-  vals = (x for x in vals if bool(x))
-  vals = list(util.period_to_seconds(x) for x in vals)
+  vals = [x.get(prop) for x in rows]
+  vals = [x for x in vals if bool(x)]
   if len(vals) == 0:
     return ''
-  cell = util.hhmmss(
-      datetime.timedelta(seconds=statistics.median(vals)),
-      decimal_precision=False)
+
+  isnum = sum(1 for x in vals if x.isnumeric()) == len(vals)
+  if isnum:
+    vals = [int(x) for x in vals]
+    cell = f'{(statistics.median(vals)):.0f}'
+  else:
+    vals = [util.period_to_seconds(x) for x in vals]
+    cell = util.hhmmss(datetime.timedelta(seconds=statistics.median(vals)),
+                       decimal_precision=False)
+
   if len(vals) > 1:
     cell = f'{cell}[N={len(vals)}]'
   return cell
@@ -139,18 +144,38 @@ def display_summarized_metrics(log_dir: Path):
 
 def main():
   p = argparse.ArgumentParser()
-  p.add_argument('metrics', help='metrics.csv file to parse')
-  p.add_argument('-p', '--properties', default=['^time$'], nargs='*',
-                 help='properties to extract, should be time period based')
+  p.add_argument(
+      '-p', '--properties',
+      default=['^time$'],
+      nargs='*',
+      help='properties to extract, should be time period based')
+  p.add_argument(
+      'metrics',
+      nargs='?',
+      default=util.get_default_log_dir().joinpath(util.METRICS_TABLE),
+      help='metrics.csv file to parse')
+  p.add_argument(
+      '--csv',
+      action='store_true'
+  )
   options = p.parse_args()
-  with open(options.metrics, mode='rt') as mf:
+  input_file = Path(options.metrics)
+  if input_file.exists() and input_file.is_dir():
+    input_file = input_file.joinpath(util.METRICS_TABLE)
+  if not input_file.exists():
+    raise RuntimeError(f'{input_file} does not exit')
+  with open(input_file, mode='rt') as mf:
     for prop, s in summarize(mf, *options.properties).items():
-      p = subprocess.run(
-          f'echo "{s}"  | grep -v "rebuild" | column -t -s,',
-          shell=True, text=True, check=True, capture_output=True)
-      logging.info('%s\n%s', prop, p.stdout)
-      if p.returncode:
-        logging.error(p.stderr)
+      logging.info('Displaying %s', prop)
+      if options.csv:
+        logging.info(s)
+      else:
+        p = subprocess.run(
+            f'echo "{s}"  | grep -v "rebuild" | column -t -s,',
+            shell=True, text=True, check=True, capture_output=True)
+        logging.info('\n%s', p.stdout)
+        if p.returncode:
+          logging.error(p.stderr)
 
 
 if __name__ == '__main__':
