@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("//build/bazel/rules/abi:abi_dump.bzl", "AbiDiffInfo", "abi_dump")
 load(
@@ -24,6 +25,7 @@ load(
 )
 load(":cc_library_static.bzl", "cc_library_static")
 load(":clang_tidy.bzl", "collect_deps_clang_tidy_info")
+load(":composed_transitions.bzl", "lto_and_sanitizer_deps_transition")
 load(
     ":composed_transitions.bzl",
     "lto_and_fdo_profile_incoming_transition",
@@ -33,13 +35,13 @@ load(
     "FDO_PROFILE_ATTR_KEY",
 )
 load(":generate_toc.bzl", "CcTocInfo", "generate_toc")
-load(":lto_transitions.bzl", "lto_deps_transition")
 load(":stl.bzl", "stl_info_from_attr")
 load(":stripped_cc_common.bzl", "CcUnstrippedInfo", "stripped_shared_library")
 load(":versioned_cc_common.bzl", "versioned_shared_library")
 
 def cc_library_shared(
         name,
+        stem = "",
         suffix = "",
         # Common arguments between shared_root and the shared library
         features = [],
@@ -142,12 +144,14 @@ def cc_library_shared(
     else:
         features = features + select({
             "//build/bazel/rules/cc:android_coverage_lib_flag": ["android_coverage_lib"],
+            "//build/bazel/rules/cc:android_coverage_lib_flag_cfi": ["android_coverage_lib"],
             "//conditions:default": [],
         })
 
         # TODO(b/233660582): deal with the cases where the default lib shouldn't be used
         whole_archive_deps = whole_archive_deps + select({
             "//build/bazel/rules/cc:android_coverage_lib_flag": ["//system/extras/toolchain-extras:libprofile-clang-extras"],
+            "//build/bazel/rules/cc:android_coverage_lib_flag_cfi": ["//system/extras/toolchain-extras:libprofile-clang-extras_cfi_support"],
             "//conditions:default": [],
         })
 
@@ -217,7 +221,8 @@ def cc_library_shared(
         stl_info.shared_deps,
     )
 
-    soname = name + suffix + ".so"
+    filename_stem = stem or name
+    soname = filename_stem + suffix + ".so"
     soname_flag = "-Wl,-soname," + soname
 
     native.cc_shared_library(
@@ -297,13 +302,14 @@ def cc_library_shared(
         shared_debuginfo = unstripped_name,
         deps = [shared_root_name],
         features = features,
-        output_file = soname,
+        output_file = paths.join(name, soname),  # Prevent name collision by generating in a directory unique to the target
         target_compatible_with = target_compatible_with,
         has_stubs = stubs_symbol_file != None,
         runtime_deps = runtime_deps,
         abi_dump = abi_dump_name,
         fdo_profile = fdo_profile,
         linkopts = linkopts,
+        package_name = native.package_name(),
         tags = tags,
     )
 
@@ -383,7 +389,7 @@ def _cc_library_shared_proxy_impl(ctx):
         fail("Expected only one shared library file and one debuginfo file for it")
 
     shared_lib = shared_files[0]
-    abi_diff_files = ctx.attr.abi_dump[AbiDiffInfo].diff_files.to_list()
+    abi_diff_files = ctx.attr.abi_dump[0][AbiDiffInfo].diff_files.to_list()
 
     # Copy the output instead of symlinking. This is because this output
     # can be directly installed into a system image; this installation treats
@@ -427,7 +433,7 @@ def _cc_library_shared_proxy_impl(ctx):
         ctx.attr.shared[0][OutputGroupInfo],
         CcSharedLibraryOutputInfo(output_file = ctx.outputs.output_file),
         CcUnstrippedInfo(unstripped = shared_debuginfo[0]),
-        ctx.attr.abi_dump[AbiDiffInfo],
+        ctx.attr.abi_dump[0][AbiDiffInfo],
         collect_deps_clang_tidy_info(ctx),
     ]
 
@@ -440,18 +446,18 @@ _cc_library_shared_proxy = rule(
         "shared": attr.label(
             mandatory = True,
             providers = [CcSharedLibraryInfo],
-            cfg = lto_deps_transition,
+            cfg = lto_and_sanitizer_deps_transition,
         ),
         "shared_debuginfo": attr.label(
             mandatory = True,
-            cfg = lto_deps_transition,
+            cfg = lto_and_sanitizer_deps_transition,
         ),
         # "deps" should be a single element: the root target of the shared library.
         # See _cc_library_shared_proxy_impl comment for explanation.
         "deps": attr.label_list(
             mandatory = True,
             providers = [CcInfo],
-            cfg = lto_deps_transition,
+            cfg = lto_and_sanitizer_deps_transition,
         ),
         "output_file": attr.output(mandatory = True),
         "has_stubs": attr.bool(default = False),
@@ -459,7 +465,14 @@ _cc_library_shared_proxy = rule(
             providers = [CcInfo],
             doc = "Deps that should be installed along with this target. Read by the apex cc aspect.",
         ),
-        "abi_dump": attr.label(providers = [AbiDiffInfo]),
+        "abi_dump": attr.label(
+            providers = [AbiDiffInfo],
+            cfg = lto_and_sanitizer_deps_transition,
+        ),
+        "package_name": attr.string(
+            mandatory = True,
+            doc = "Just the path to the target package. Used by transitions.",
+        ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),

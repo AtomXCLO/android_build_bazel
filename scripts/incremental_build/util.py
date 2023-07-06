@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import csv
+import dataclasses
 import datetime
+import enum
 import functools
 import glob
+import json
 import logging
 import os
 import re
@@ -22,10 +25,14 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Callable
 from typing import Final
 from typing import Generator
 
 INDICATOR_FILE: Final[str] = 'build/soong/soong_ui.bash'
+# metrics.csv is written to but not read by this tool.
+# It's supposed to be viewed as a spreadsheet that compiles data from multiple
+# builds to be analyzed by other external tools.
 METRICS_TABLE: Final[str] = 'metrics.csv'
 SUMMARY_TABLE: Final[str] = 'summary.csv'
 RUN_DIR_PREFIX: Final[str] = 'run'
@@ -44,6 +51,67 @@ def _is_important(column) -> bool:
     if re.fullmatch(pattern, column):
       return True
   return False
+
+
+class BuildResult(enum.Enum):
+  SUCCESS = enum.auto()
+  FAILED = enum.auto()
+  TEST_FAILURE = enum.auto()
+
+
+class BuildType(enum.Enum):
+  # see https://docs.python.org/3/library/enum.html#enum.Enum._ignore_
+  _ignore_ = '_soong_cmd'
+  # _sooong_cmd_ will not be listed as an enum constant because of `_ignore_`
+  _soong_cmd = ['build/soong/soong_ui.bash',
+                '--make-mode',
+                '--skip-soong-tests']
+
+  SOONG_ONLY = [*_soong_cmd, 'BUILD_BROKEN_DISABLE_BAZEL=true']
+  MIXED_PROD = [*_soong_cmd, '--bazel-mode']
+  MIXED_STAGING = [*_soong_cmd, '--bazel-mode-staging']
+  B = ['build/bazel/bin/b', 'build']
+  B_ANDROID = [*B, '--config=android']
+
+  @staticmethod
+  def from_flag(s: str) -> list['BuildType']:
+    chosen: list[BuildType] = []
+    for e in BuildType:
+      if s.lower() in e.name.lower():
+        chosen.append(e)
+    if len(chosen) == 0:
+      raise RuntimeError(f'no such build type: {s}')
+    return chosen
+
+  def to_flag(self):
+    return self.name.lower()
+
+
+@dataclasses.dataclass(frozen=True)
+class BuildInfo:
+  build_type: BuildType
+  build_result: BuildResult
+  build_ninja_hash: str  # hash
+  build_ninja_size: int
+  product: str
+  time: datetime.timedelta
+  actions: int
+  cquery_out_size: int = -1
+  description: str = '<unset>'
+  warmup: bool = False
+  rebuild: bool = False
+  targets: tuple[str, ...] = None
+
+
+class CustomEncoder(json.JSONEncoder):
+  def default(self, obj):
+    if isinstance(obj, BuildInfo):
+      return dataclasses.asdict(obj)
+    if isinstance(obj, datetime.timedelta):
+      return hhmmss(obj, decimal_precision=True)
+    if isinstance(obj, enum.Enum):
+      return obj.name
+    return json.JSONEncoder.default(self, obj)
 
 
 def get_csv_columns_cmd(d: Path) -> str:
@@ -165,20 +233,11 @@ def has_uncommitted_changes() -> bool:
   for cmd in ['diff', 'diff --staged']:
     diff = subprocess.run(
         args=f'repo forall -c git {cmd} --quiet --exit-code'.split(),
-        cwd=get_top_dir(), text=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL)
+        cwd=get_top_dir(), text=True, capture_output=True)
     if diff.returncode != 0:
+      logging.error(diff.stderr)
       return True
   return False
-
-
-@functools.cache
-def is_ninja_dry_run(ninja_args: str = None) -> bool:
-  if ninja_args is None:
-    ninja_args = os.environ.get('NINJA_ARGS') or ''
-  ninja_dry_run = re.compile(r'(?:^|\s)-n\b')
-  return ninja_dry_run.search(ninja_args) is not None
 
 
 def is_git_repo(p: Path) -> bool:
@@ -287,3 +346,11 @@ def period_to_seconds(s: str) -> float:
       s = right[0]
     else:
       return acc
+
+
+def groupby(xs: list[dict], key: Callable[[dict], str]) -> dict[
+  str, list[dict]]:
+  grouped = {}
+  for x in xs:
+    grouped.setdefault(key(x), []).append(x)
+  return grouped

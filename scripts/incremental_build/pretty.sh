@@ -1,10 +1,12 @@
+#!/bin/bash -eu
+#
 # Copyright (C) 2023 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,8 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//build/bazel/rules/common/api_constants.bzl", _api_levels_released_versions = "api_levels_released_versions")
-load("//build/bazel/rules/env_variables.bzl", _CAPTURED_ENV_VARS = "CAPTURED_ENV_VARS")
+#
+# Gather and print top-line performance metrics for the android build
+#
+readonly TOP="$(realpath "$(dirname "$0")/../../../..")"
 
-api_levels_released_versions = _api_levels_released_versions
-captured_env_vars = _CAPTURED_ENV_VARS
+"$TOP/build/soong/soong_ui.bash" \
+  --build-mode \
+  --all-modules \
+  --dir="$(pwd)" \
+  --skip-soong-tests \
+  bp2build
+
+ANDROID_BUILD_TOP=$TOP "$TOP/build/bazel/bin/bazel" \
+  run --config=bp2build --verbose_failures \
+  //build/bazel/scripts/incremental_build:pretty -- "$@"

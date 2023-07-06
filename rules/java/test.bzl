@@ -12,8 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//build/bazel/rules/common/api_constants.bzl", _api_levels_released_versions = "api_levels_released_versions")
-load("//build/bazel/rules/env_variables.bzl", _CAPTURED_ENV_VARS = "CAPTURED_ENV_VARS")
+load("@rules_java//java:defs.bzl", _java_test = "java_test")
 
-api_levels_released_versions = _api_levels_released_versions
-captured_env_vars = _CAPTURED_ENV_VARS
+def java_test(
+        name = "",
+        runtime_deps = [],
+        target_compatible_with = [],
+        **kwargs):
+    # forward arguments to _java_test because we'll need to hook into tradefed.
+    _java_test(
+        name = name,
+        runtime_deps = runtime_deps,
+        target_compatible_with = target_compatible_with,
+        **kwargs
+    )

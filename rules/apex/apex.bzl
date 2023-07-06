@@ -223,9 +223,12 @@ def _add_apex_manifest_information(
     args.add_all(["-a", "provideNativeLibs"])
     args.add_all(provides_native_libs, map_each = _add_so)
 
-    manifest_version = ctx.attr._override_apex_manifest_default_version[BuildSettingInfo].value
-    if not manifest_version:
-        manifest_version = default_manifest_version
+    manifest_version = default_manifest_version
+    if ctx.attr.variant_version != "":
+        manifest_version = manifest_version + int(ctx.attr.variant_version)
+    override_manifest_version = ctx.attr._override_apex_manifest_default_version[BuildSettingInfo].value
+    if override_manifest_version:
+        manifest_version = override_manifest_version
     args.add_all(["-se", "version", "0", manifest_version])
 
     # TODO: support other optional flags like -v name and -a jniLibs
@@ -786,12 +789,25 @@ def _generate_sbom(ctx, file_mapping, metadata_file_mapping, apex_file):
     sbom_metadata_csv = ctx.actions.declare_file(apex_filename + "-sbom-metadata.csv")
     command = []
     metadata_files = []
-    command.append("echo installed_file,module_path,soong_module_type,is_prebuilt_make_module,product_copy_files,kernel_module_copy_files,is_platform_generated,build_output_path")
-    command.append("echo %s,%s,,,,,,%s" % (apex_filename, ctx.label.package, apex_file.path))
+    sbom_metadata_csv_columns = [
+        "installed_file",
+        "module_path",
+        "soong_module_type",
+        "is_prebuilt_make_module",
+        "product_copy_files",
+        "kernel_module_copy_files",
+        "is_platform_generated",
+        "build_output_path",
+        "static_libraries",
+        "whole_static_libraries",
+        "is_static_lib",
+    ]
+    command.append("echo " + ",".join(sbom_metadata_csv_columns))
+    command.append("echo %s,%s,,,,,,%s,,," % (apex_filename, ctx.label.package, apex_file.path))
     for installed_file, bazel_output_file in file_mapping.items():
         if metadata_file_mapping[installed_file]:
             metadata_files.append(metadata_file_mapping[installed_file])
-        command.append("echo %s,%s,,,,,,%s" % (installed_file, paths.dirname(bazel_output_file.short_path), bazel_output_file.path))
+        command.append("echo %s,%s,,,,,,%s,,," % (installed_file, paths.dirname(bazel_output_file.short_path), bazel_output_file.path))
     ctx.actions.run_shell(
         inputs = file_mapping.values(),
         outputs = [sbom_metadata_csv],
@@ -975,6 +991,17 @@ APEX is truly updatable. To be updatable, min_sdk_version should be set as well.
         "base_apex_name": attr.string(
             default = "",
             doc = "The name of the base apex of this apex. For example, the AOSP variant of this apex.",
+        ),
+        "apex_available_name": attr.string(
+            default = "",
+            doc = "The name that dependencies can specify in their apex_available " +
+                  "properties to refer to this module. If not specified, this " +
+                  "defaults to Soong module name.",
+        ),
+        "variant_version": attr.string(
+            default = "",
+            doc = "Variant version of the mainline module. Must be an integer between 0-9",
+            values = [""] + [str(i) for i in range(10)],
         ),
 
         # Attributes that contribute to the payload.

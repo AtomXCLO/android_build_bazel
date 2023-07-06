@@ -27,6 +27,7 @@ load(":versioned_cc_common.bzl", "versioned_binary")
 
 def cc_binary(
         name,
+        stem = "",
         suffix = "",
         dynamic_deps = [],
         srcs = [],
@@ -84,6 +85,7 @@ def cc_binary(
 
     if min_sdk_version:
         toolchain_features += parse_sdk_version(min_sdk_version) + ["-sdk_version_default"]
+
     toolchain_features += features
 
     system_dynamic_deps = []
@@ -199,14 +201,17 @@ def cc_binary(
 
     stripped_cc_rule(
         name = name,
+        stem = stem,
         suffix = suffix,
         src = versioned_name,
         runtime_deps = runtime_deps,
         target_compatible_with = target_compatible_with,
         tags = tags,
         unstripped = unstripped_name,
+        features = toolchain_features,
         testonly = generate_cc_test,
         androidmk_deps = [root_name],
         linkopts = linkopts,
+        package_name = native.package_name(),
         **strip
     )

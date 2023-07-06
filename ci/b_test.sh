@@ -1,5 +1,5 @@
 #!/bin/bash -eu
-#
+
 # Copyright (C) 2023 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,22 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#
-# Gather and print top-line performance metrics for the android build
-#
-readonly TOP="$(realpath "$(dirname "$0")/../../../..")"
+# Verifies that the b invocations properly record metrics and their exit codes.
+build/bazel/bin/b build libcore:all
 
-"$TOP/build/soong/soong_ui.bash" \
-  --build-mode \
-  --all-modules \
-  --dir="$(pwd)" \
-  --skip-soong-tests \
-  bp2build
+build/bazel/scripts/analyze_build
 
-# to debug use `--run_under /usr/lib/python3.10/pdb.py`
-# or simply add `breakpoint()` in the code somewhere
-ANDROID_BUILD_TOP=$TOP "$TOP/build/bazel/bin/bazel" \
-  run --config=bp2build --verbose_failures \
-  //build/bazel/scripts/incremental_build -- "$@"
+if [[ ! $(grep '"exitCode": 0' out/analyze_build_output/bazel_metrics.json) ]]; then
+   echo "Failed to locate bazel exit code in metrics output"
+   exit 1
+fi
 
-# Alternatively, we could use python_zip_file, https://github.com/bazelbuild/bazel/pull/9453
+build/bazel/bin/b build libcore:nonexistent_module
+
+build/bazel/scripts/analyze_build
+
+if [[ ! $(grep '"exitCode": 1' out/analyze_build_output/bazel_metrics.json) ]]; then
+   echo "Failed to locate bazel exit code in metrics output"
+   exit 1
+fi
