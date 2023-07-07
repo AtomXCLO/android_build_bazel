@@ -1,4 +1,4 @@
-#!/bin/bash -eu
+#!/bin/bash -e
 
 # Copyright (C) 2023 The Android Open Source Project
 #
@@ -13,22 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+source $(cd $(dirname $BASH_SOURCE) &> /dev/null && pwd)/../../make/shell_utils.sh
+require_top
 
-# Verifies that the b invocations properly record metrics and their exit codes.
-build/bazel/bin/b build libcore:all
-
-build/bazel/scripts/analyze_build
-
-if [[ ! $(grep '"exitCode": 0' out/analyze_build_output/bazel_metrics.json) ]]; then
-   echo "Failed to locate bazel exit code in metrics output"
+aconfig="$ANDROID_SOONG_HOST_OUT"/bin/aconfig
+flags_file="$(getoutdir)"/soong/.intermediates/all_aconfig_declarations.pb
+if [[ ! -f "$aconfig" || ! -f "$flags_file" ]]; then
+   echo "Missing dependencies: please run 'm all_aconfig_declarations' and try again."
    exit 1
 fi
-
-build/bazel/bin/b build libcore:nonexistent_module &> /dev/null || true
-
-build/bazel/scripts/analyze_build
-
-if [[ ! $(grep '"exitCode": 1' out/analyze_build_output/bazel_metrics.json) ]]; then
-   echo "Failed to locate bazel exit code in metrics output"
-   exit 1
-fi
+$aconfig dump --cache $flags_file $@
