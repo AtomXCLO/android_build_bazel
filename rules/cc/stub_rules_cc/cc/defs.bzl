@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#       http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,10 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//build/bazel/tests/products:product_labels.bzl", _products_for_testing = "products")
-load("//build/bazel/rules/common/api_constants.bzl", _api_levels_released_versions = "api_levels_released_versions")
-load("//build/bazel/rules/env_variables.bzl", _CAPTURED_ENV_VARS = "CAPTURED_ENV_VARS")
+"""Fake version of @rules_cc//cc:defs.bzl to avoid downloading it
+from the Internet. rules_cc is needed during migration to native.X.
+"""
 
-api_levels_released_versions = _api_levels_released_versions
-captured_env_vars = _CAPTURED_ENV_VARS
-products_for_testing = _products_for_testing
+# Needed by py_binary
+cc_toolchain = native.cc_toolchain
+cc_toolchain_suite = native.cc_toolchain_suite
+
+# Needed by @remote_java_tools
+# TODO(b/261489408): Clean up remote_java_* dependencies then delete the following
+cc_binary = native.cc_binary
+cc_library = native.cc_library
+cc_proto_library = native.cc_proto_library
