@@ -14,7 +14,7 @@
 
 """cc_test macro for building native tests with Bazel."""
 
-load("//build/bazel/rules/tradefed:tradefed.bzl", "LANGUAGE_CC", "tradefed_test_suite")
+load("//build/bazel/rules/tradefed:tradefed.bzl", "LANGUAGE_CC", "TEST_DEP_SUFFIX", "tradefed_test_suite")
 load(":cc_binary.bzl", "cc_binary")
 
 # TODO(b/244559183): Keep this in sync with cc/test.go#linkerFlags
@@ -31,18 +31,12 @@ _gtest_copts = select({
     "-Wno-unused-result",  # TODO(b/244433518): Figure out why this is necessary in the bazel compile action.
 ]
 
-_gtest_deps = [
-    "//external/googletest/googletest:libgtest_main",
-    "//external/googletest/googletest:libgtest",
-]
-
 def cc_test(
         name,
         copts = [],
         deps = [],
         dynamic_deps = [],
         gtest = True,
-        isolated = True,  # TODO(b/244432609): currently no-op. @unused
         tags = [],
         tidy = None,
         tidy_checks = None,
@@ -60,13 +54,11 @@ def cc_test(
     # NOTE: Keep this in sync with cc/test.go#linkerDeps
     if gtest:
         # TODO(b/244433197): handle ctx.useSdk() && ctx.Device() case to link against the ndk variants of the gtest libs.
-        # TODO(b/244432609): handle isolated = True to link against libgtest_isolated_main and liblog (dynamically)
-        deps = deps + _gtest_deps
         copts = copts + _gtest_copts
 
     # A cc_test is essentially the same as a cc_binary. Let's reuse the
     # implementation for now and factor the common bits out as necessary.
-    test_dep_name = name + "__tf_internal"
+    test_dep_name = name + TEST_DEP_SUFFIX
     cc_binary(
         name = test_dep_name,
         copts = copts,

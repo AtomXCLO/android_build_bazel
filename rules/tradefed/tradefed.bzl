@@ -12,8 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""The tradefest test ruleset.
+
+This file contains the definition and implementation of:
+
+- tradefed_test_suite, which expands to
+    - tradefed_deviceless_test
+    - tradefed_host_driven_device_test
+    - tradefed_device_driven_test
+
+These rules provide Tradefed harness support around test executables and
+runfiles. They are language independent, and thus work with cc_test, java_test,
+and other test types.
+
+The execution mode (host, device, deviceless) is automatically determined by the
+target_compatible_with attribute of the test dependency. Whether a test runs is
+handled by Bazel's incompatible target skipping, i.e. a test dep that's
+compatible only with android would cause the tradefed_deviceless_test to be
+SKIPPED automatically.
+"""
+
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//lib:paths.bzl", "paths")
+
+# Apply this suffix to the name of the test dep target (e.g. the cc_test target)
+TEST_DEP_SUFFIX = "__tf_internal"
 
 LANGUAGE_CC = "cc"
 LANGUAGE_JAVA = "java"
@@ -24,7 +47,7 @@ LANGUAGE_JAVA = "java"
 # TODO(b/290716628): Handle multilib. For example, cc_test sets `multilib:
 # "both"` by default, so this may drop the secondary arch of the test, depending
 # on the TARGET_PRODUCT.
-def _tradefed_always_device_transition_impl(settings, attr):
+def _tradefed_always_device_transition_impl(settings, _):
     old_platform = str(settings["//command_line_option:platforms"][0])
 
     # TODO(b/290716626): This is brittle handling for distinguishing between
@@ -46,6 +69,16 @@ _TRADEFED_TEST_ATTRIBUTES = {
         default = ":tradefed.sh.tpl",
         allow_single_file = True,
         doc = "Template script to launch tradefed.",
+    ),
+    "_atest_tradefed_launcher": attr.label(
+        default = "//tools/asuite/atest:atest_tradefed.sh",
+        allow_single_file = True,
+        cfg = "exec",
+    ),
+    "_atest_helper": attr.label(
+        default = "//tools/asuite/atest:atest_script_help.sh",
+        allow_single_file = True,
+        cfg = "exec",
     ),
     "_tradefed_dependencies": attr.label_list(
         default = [
@@ -81,6 +114,15 @@ _TRADEFED_TEST_ATTRIBUTES = {
     ),
 }
 
+# The normalized name of test under tradefed harness. This is without any of the
+#
+# "__tf" suffixes, e.g. adbd_test or hello_world_test.
+#
+#The normalized module name is used as the stem for the test executable or
+# config files, which are referenced in AndroidTest.xml, like in PushFilePreparer elements.
+def _normalize_test_name(s):
+    return s.replace(TEST_DEP_SUFFIX, "")
+
 # Get test config if specified or generate test config from template.
 def _get_or_generate_test_config(ctx, tf_test_dir, test_executable, test_language):
     # Validate input
@@ -93,7 +135,7 @@ def _get_or_generate_test_config(ctx, tf_test_dir, test_executable, test_languag
         fail("Exactly one of test_config or test_config_template should be provided, but got: " +
              "%s %s" % (ctx.file.test_config, ctx.file.template_test_config))
 
-    basename = test_executable.basename
+    basename = _normalize_test_name(test_executable.basename)
 
     # If existing tradefed config is specified, symlink to it and return early.
     #
@@ -117,7 +159,7 @@ def _get_or_generate_test_config(ctx, tf_test_dir, test_executable, test_languag
     # configs together and add xml spacing indent.
     if test_language == LANGUAGE_JAVA:
         # rm ".jar" extension since it's "{MODULE}.jar" in Java config template
-        basename = basename.rstrip(".jar")
+        basename = basename.removesuffix(".jar")
     ctx.actions.expand_template(
         template = ctx.file.template_test_config,
         output = out,
@@ -149,13 +191,21 @@ def _create_result_reporter_config(ctx):
     ctx.actions.write(result_reporters_config_file, "\n".join(config_lines))
     return result_reporters_config_file
 
+# Get the test Target object.
+#
+# ctx.attr.test could be a list, depending on the rule configuration. Host
+# driven device test transitions ctx.attr.test to device config, which turns the
+# test attr into a label list.
+def _get_test_target(ctx):
+    if type(ctx.attr.test) == "list":
+        return ctx.attr.test[0]
+    return ctx.attr.test
+
 # Generate and run tradefed bash script entry point and associated runfiles.
 def _tradefed_test_impl(ctx, tradefed_options = []):
     tf_test_dir = ctx.label.name + "/testcases"
 
-    # host driven device test transitions ctx.attr.test to device config,
-    # which turns the test attr into a label list.
-    test_target = ctx.attr.test[0] if type(ctx.attr.test) == "list" else ctx.attr.test
+    test_target = _get_test_target(ctx)
     test_language = ctx.attr.test_language
 
     # For Java, a library may make more sense here than the executable. When
@@ -166,7 +216,7 @@ def _tradefed_test_impl(ctx, tradefed_options = []):
         test_executable = test_target.files.to_list()[0]
     else:
         test_executable = test_target.files_to_run.executable
-    test_basename = test_executable.basename
+    test_basename = _normalize_test_name(test_executable.basename)
 
     # Get or generate test config.
     test_config = _get_or_generate_test_config(ctx, tf_test_dir, test_executable, test_language)
@@ -199,9 +249,17 @@ def _tradefed_test_impl(ctx, tradefed_options = []):
             target_file = f,
         )
         test_runfiles.append(out)
+        test_runfiles.append(f)
 
     # Gather runfiles.
-    runfiles = ctx.runfiles(files = test_runfiles + [test_config, report_config])
+    runfiles = ctx.runfiles(
+        files = test_runfiles + [
+            test_config,
+            report_config,
+            ctx.file._atest_tradefed_launcher,
+            ctx.file._atest_helper,
+        ],
+    )
     runfiles = runfiles.merge(test_target.default_runfiles)
 
     # Generate script to run tradefed.
@@ -212,6 +270,9 @@ def _tradefed_test_impl(ctx, tradefed_options = []):
         is_executable = True,
         substitutions = {
             "{MODULE}": test_basename,
+            "{atest_tradefed_launcher}": _abspath(ctx.file._atest_tradefed_launcher.short_path),
+            "{atest_helper}": _abspath(ctx.file._atest_helper.short_path),
+            "{tradefed_classpath}": _classpath(ctx.files._tradefed_dependencies),
             "{root_relative_tests_dir}": root_relative_tests_dir,
             "{additional_tradefed_options}": " ".join(tradefed_options),
         },
@@ -327,11 +388,25 @@ def tradefed_test_suite(
     This enables users or tools to simply run 'b test //path/to:foo_test_suite' and bazel
     can automatically determine which of the device or deviceless variants to run, using
     target_compatible_with information from the test_dep target.
+
+
+    Args:
+      name: name of the test suite. This is the canonical name of the test, e.g. "hello_world_test".
+      test_dep: label of the language-specific test dependency.
+      test_config: label of a custom Tradefed XML config. if specified, skip auto generation with default configs.
+      template_configs: additional lines to be added to the test config.
+      template_install_base: the default install location on device for files.
+      tags: additional tags for the top level test_suite target. This can be used for filtering tests.
+      visibility: Bazel visibility declarations for this target.
+      test_language: language used for the test dependency. One of [LANGUAGE_CC, LANGUAGE_JAVA].
+      deviceless_test_config: default Tradefed test config for the deviceless execution mode.
+      device_driven_test_config: default Tradefed test config for the device driven execution mode.
+      host_driven_device_test_config: default Tradefed test config for the host driven execution mode.
     """
 
     # Validate names.
-    if not test_dep.endswith("__tf_internal") or test_dep.removesuffix("__tf_internal") != name:
-        fail("tradefed_test_suite.test_dep must be named %s__tf_internal, " % name +
+    if not test_dep.endswith(TEST_DEP_SUFFIX) or test_dep.removesuffix(TEST_DEP_SUFFIX) != name:
+        fail("tradefed_test_suite.test_dep must be named %s%s, " % (name, TEST_DEP_SUFFIX) +
              "but got %s" % test_dep)
 
     # Shared attributes between all three test types. The only difference between them
@@ -403,3 +478,9 @@ def tradefed_test_suite(
         tags = tags,
         target_compatible_with = ["//build/bazel/platforms/os:linux"],
     )
+
+def _abspath(relative):
+    return "${TEST_SRCDIR}/${TEST_WORKSPACE}/" + relative
+
+def _classpath(jars):
+    return ":".join([_abspath(f.short_path) for f in depset(jars).to_list()])
