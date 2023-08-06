@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+import textwrap
 from typing import Callable
 from typing import Final
 from typing import Generator
@@ -103,10 +104,13 @@ CURRENT_BUILD_TYPE: BuildType
 @dataclasses.dataclass
 class BuildInfo:
     actions: int
+    bp_size_total: int
     build_ninja_hash: str  # hash
     build_ninja_size: int
     build_result: BuildResult
     build_type: BuildType
+    bz_size_total: int
+    cquery_out_size: int
     description: str
     product: str
     targets: tuple[str, ...]
@@ -158,7 +162,7 @@ def get_cmd_to_display_tabulated_metrics(d: Path, ci_mode: bool) -> str:
                 cols.append(i)
 
     if len(cols) == 0:
-        # syntactically correct command even if the file doesn't exist or is empty
+        # syntactically correct command even if the file doesn't exist
         cols.append(1)
 
     f = ",".join(str(i) for i in cols)
@@ -172,13 +176,14 @@ def get_cmd_to_display_tabulated_metrics(d: Path, ci_mode: bool) -> str:
     #    `--,--,--,hi,--,--,--,` =>
     #    `--,--,--,hi,--,--,--,--`
     # Note sed doesn't support lookahead or lookbehinds
-    return (
-        f'grep -v "WARMUP\\|rebuild-" "{csv_file}" | '
-        f'sed "s/,,/,--,/g" | '
-        f'sed "s/,,/,--,/g" | '
-        f'sed "s/^,/--,/" | '
-        f'sed "s/,$/,--/" | '
-        f"cut -d, -f{f} | column -t -s,"
+    return textwrap.dedent(
+        f"""\
+        grep -v "WARMUP\\|rebuild-" "{csv_file}" | \\
+          sed "s/,,/,--,/g" | \\
+          sed "s/,,/,--,/g" | \\
+          sed "s/^,/--,/" | \\
+          sed "s/,$/,--/" | \\
+          cut -d, -f{f} | column -t -s,"""
     )
 
 

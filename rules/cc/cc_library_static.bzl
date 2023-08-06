@@ -188,7 +188,7 @@ def cc_library_static(
             ("implementation_deps", [locals_name]),
             ("deps", [exports_name]),
             ("features", toolchain_features),
-            ("toolchains", ["//build/bazel/product_config:product_vars"]),
+            ("toolchains", ["//build/bazel/product_config:product_variables_for_attributes"]),
             ("target_compatible_with", target_compatible_with),
             ("linkopts", linkopts),
         ],
@@ -682,8 +682,8 @@ _cc_library_combiner = rule(
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),
-        "_product_variables": attr.label(
-            default = "//build/bazel/product_config:product_vars",
+        "_tidy_checks": attr.label(
+            default = "//build/bazel/product_config:tidy_checks",
         ),
     },
     toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],

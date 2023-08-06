@@ -18,6 +18,8 @@ import datetime
 import glob
 import json
 import logging
+import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -56,18 +58,42 @@ class PerfInfoOrEvent:
 
 BP2BUILD_PB = "bp2build_metrics.pb"
 BUILD_TRACE_GZ = "build.trace.gz"
+CRITICAL_PATH = "soong.log"
 SOONG_BUILD_PB = "soong_build_metrics.pb"
 SOONG_PB = "soong_metrics"
+
+
+def _archive_pprof(envvar: str, d:Path):
+    if envvar not in os.environ:
+        return
+    pprof_prefix = pathlib.Path(os.environ[envvar])
+    if not pprof_prefix.is_absolute():
+        logging.warning(
+            "Ignoring pprof files; please use an absolute path, e.g. "
+            f"{envvar}={util.get_out_dir().joinpath('pprof')}"
+        )
+        return
+    for profile in os.listdir(str(pprof_prefix.parent)):
+        if profile.startswith(f"{pprof_prefix.name}."):
+            shutil.move(pprof_prefix.with_name(profile), d)
 
 
 def archive_run(d: Path, build_info: util.BuildInfo):
     with open(d.joinpath(util.BUILD_INFO_JSON), "w") as f:
         json.dump(build_info, f, indent=True, cls=util.CustomEncoder)
-    metrics_to_copy = [BP2BUILD_PB, BUILD_TRACE_GZ, SOONG_BUILD_PB, SOONG_PB]
+    metrics_to_copy = [
+        BP2BUILD_PB,
+        BUILD_TRACE_GZ,
+        CRITICAL_PATH,
+        SOONG_BUILD_PB,
+        SOONG_PB,
+    ]
     for metric_name in metrics_to_copy:
         metric = util.get_out_dir().joinpath(metric_name)
         if metric.exists():
             shutil.copy(metric, d.joinpath(metric_name))
+    _archive_pprof("SOONG_PROFILE_CPU", d)
+    _archive_pprof("SOONG_PROFILE_MEM", d)
 
 
 def read_pbs(d: Path) -> tuple[dict[str, any], list[PerfInfoOrEvent]]:
@@ -143,6 +169,9 @@ def read_pbs(d: Path) -> tuple[dict[str, any], list[PerfInfoOrEvent]]:
         ms = soong_build_metrics.mixed_builds_info.mixed_build_disabled_modules
         if ms:
             retval["mixed.disabled"] = len(ms)
+    if bp2build_pb.exists():
+        retval["generatedModuleCount"] = bp2build_metrics.generatedModuleCount
+        retval["unconvertedModuleCount"] = bp2build_metrics.unconvertedModuleCount
     return retval, events
 
 
@@ -275,16 +304,14 @@ def display_tabulated_metrics(log_dir: Path, ci_mode: bool):
     output = subprocess.check_output(cmd_str, shell=True, text=True)
     logging.info(
         textwrap.dedent(
-            f"""
-  %s
-  TIPS:
-  1 To view key metrics in metrics.csv:
-    %s
-  2 To view column headers:
-    %s
-    """
+            f"""\
+            %s
+            %s
+            TIP to view column headers:
+              %s
+            """
         ),
-        output,
         cmd_str,
+        output,
         util.get_csv_columns_cmd(log_dir),
     )
