@@ -42,10 +42,11 @@ BUILD_INFO_JSON: Final[str] = 'build_info.json'
 @functools.cache
 def _is_important(column) -> bool:
   patterns = {
-      'description', 'build_type', r'build\.ninja(\.size)?', 'targets',
-      'log', 'actions', 'time',
-      'soong/soong', 'bp2build/', 'symlink_forest/', r'soong_build/\*',
-      r'soong_build/\*\.bazel', 'kati/kati build', 'ninja/ninja'
+      'actions', r'build_ninja_(?:hash|size)', 'build_type',
+      'cquery_out_size', 'description', 'log', r'mixed\.enabled', 'targets',
+      # the following are time-based values
+      'bp2build', r'kati/kati (?:build|package)', 'ninja/ninja', 'soong/soong',
+      r'soong_build/\*(?:\.bazel)?', 'symlink_forest', 'time'
   }
   for pattern in patterns:
     if re.fullmatch(pattern, column):
@@ -87,7 +88,11 @@ class BuildType(enum.Enum):
     return self.name.lower()
 
 
-@dataclasses.dataclass(frozen=True)
+CURRENT_BUILD_TYPE: BuildType
+"""global state capturing what the current build type is"""
+
+
+@dataclasses.dataclass
 class BuildInfo:
   build_type: BuildType
   build_result: BuildResult
@@ -96,7 +101,7 @@ class BuildInfo:
   product: str
   time: datetime.timedelta
   actions: int
-  cquery_out_size: int = -1
+  cquery_out_size: int = None
   description: str = '<unset>'
   warmup: bool = False
   rebuild: bool = False
@@ -120,7 +125,7 @@ def get_csv_columns_cmd(d: Path) -> str:
   :return: a quick shell command to view columns in metrics.csv
   """
   csv_file = d.joinpath(METRICS_TABLE)
-  return f'head -n 1 "{csv_file.absolute()}" | sed "s/,/\\n/g" | nl'
+  return f'head -n 1 "{csv_file.absolute()}" | sed "s/,/\\n/g" | less -N'
 
 
 def get_cmd_to_display_tabulated_metrics(d: Path, ci_mode: bool) -> str:
@@ -136,19 +141,18 @@ def get_cmd_to_display_tabulated_metrics(d: Path, ci_mode: bool) -> str:
       reader = csv.DictReader(r)
       headers = reader.fieldnames or []
 
-  columns: list[int] = [i for i, h in enumerate(headers) if _is_important(h)]
+  cols: list[int] = [i + 1 for i, h in enumerate(headers) if _is_important(h)]
   if ci_mode:
     # ci mode contains all information about the top level events
     for i, h in enumerate(headers):
-      if re.match(r'^\w+/[^.]+$', h) and i not in columns:
-        columns.append(i)
+      if re.match(r'^\w+/[^.]+$', h) and i not in cols:
+        cols.append(i)
 
-  if len(columns):
-    # just so that the command is "correct" even if the file doesn't exist
-    # or is empty
-    columns.append(1)
+  if len(cols) == 0:
+    # syntactically correct command even if the file doesn't exist or is empty
+    cols.append(1)
 
-  f = ','.join(str(i + 1) for i in columns)
+  f = ','.join(str(i) for i in cols)
   # the sed invocations are to account for
   # https://man7.org/linux/man-pages/man1/column.1.html#BUGS
   # example: if a row were `,,,hi,,,,`

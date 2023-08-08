@@ -30,4 +30,4 @@ fi
 
 ANDROID_BUILD_TOP=$TOP "$TOP/build/bazel/bin/bazel" \
   run --config=bp2build --verbose_failures \
-  //build/bazel/scripts/incremental_build:pretty -- "$@"
+  //build/bazel/scripts/incremental_build:clone -- "$@"
