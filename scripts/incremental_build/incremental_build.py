@@ -292,7 +292,7 @@ def main():
 
     def run_cuj_group(cuj_group: cuj_catalog.CujGroup):
         nonlocal stop_building
-        for cujstep in cuj_group.steps:
+        for cujstep in cuj_group.get_steps():
             desc = cujstep.verb
             desc = f"{desc} {cuj_group.description}".strip()
             logging.info(
@@ -381,6 +381,8 @@ class ColoredLoggingFormatter(logging.Formatter):
 
 
 def configure_logger():
+    logging.root.setLevel(logging.INFO)
+
     eh = logging.StreamHandler(stream=sys.stderr)
     eh.setLevel(logging.WARNING)
     eh.setFormatter(ColoredLoggingFormatter())
