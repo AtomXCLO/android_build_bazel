@@ -25,10 +25,10 @@ load(
 )
 load(":cc_library_static.bzl", "cc_library_static")
 load(":clang_tidy.bzl", "collect_deps_clang_tidy_info")
-load(":composed_transitions.bzl", "lto_and_sanitizer_deps_transition")
 load(
     ":composed_transitions.bzl",
     "lto_and_fdo_profile_incoming_transition",
+    "lto_and_sanitizer_deps_transition",
 )
 load(
     ":fdo_profile_transitions.bzl",
@@ -127,6 +127,7 @@ def cc_library_shared(
         linkopts = linkopts + [
             "-funique-internal-linkage-names",
             "-fprofile-sample-accurate",
+            # profile-sample-use is needed to ensure symbol ordering
             "-fprofile-sample-use=$(location {})".format(fdo_profile_path),
             "-Wl,-mllvm,-no-warn-sample-unused=true",
         ]
@@ -149,7 +150,7 @@ def cc_library_shared(
         })
 
         # TODO(b/233660582): deal with the cases where the default lib shouldn't be used
-        whole_archive_deps = whole_archive_deps + select({
+        deps = deps + select({
             "//build/bazel/rules/cc:android_coverage_lib_flag": ["//system/extras/toolchain-extras:libprofile-clang-extras"],
             "//build/bazel/rules/cc:android_coverage_lib_flag_cfi": ["//system/extras/toolchain-extras:libprofile-clang-extras_cfi_support"],
             "//conditions:default": [],
@@ -229,6 +230,7 @@ def cc_library_shared(
         name = unstripped_name,
         user_link_flags = linkopts + [soname_flag],
         dynamic_deps = shared_dynamic_deps,
+        experimental_disable_topo_sort_do_not_use_remove_before_7_0 = True,  # TODO(b/280902394) remove
         additional_linker_inputs = additional_linker_inputs,
         deps = [shared_root_name] + whole_archive_deps + [imp_deps_stub],
         features = features,
@@ -333,23 +335,15 @@ def _create_dynamic_library_linker_input_for_file(ctx, shared_info, output):
     )
     return new_linker_input
 
-def _correct_cc_shared_library_linking(ctx, shared_info, new_output, static_root):
+def _correct_cc_shared_library_linking(ctx, shared_info, new_output):
     # we may have done some post-processing of the shared library
     # replace the linker_input that has not been post-processed with the
     # library that has been post-processed
     new_linker_input = _create_dynamic_library_linker_input_for_file(ctx, shared_info, new_output)
 
-    # only export the static internal root, we include other libraries as roots
-    # that should be linked as alwayslink; however, if they remain as exports,
-    # they will be linked dynamically, not statically when they should be
-    static_root_label = str(static_root.label)
-    if static_root_label not in shared_info.exports:
-        fail("Expected %s in exports %s" % (static_root_label, shared_info.exports))
-    exports = [static_root_label]
-
     return CcSharedLibraryInfo(
         dynamic_deps = shared_info.dynamic_deps,
-        exports = exports,
+        exports = shared_info.exports,
         link_once_static_libs = shared_info.link_once_static_libs,
         linker_input = new_linker_input,
     )
@@ -422,7 +416,7 @@ def _cc_library_shared_proxy_impl(ctx):
             files = depset(direct = files),
             runfiles = ctx.runfiles(files = [ctx.outputs.output_file]),
         ),
-        _correct_cc_shared_library_linking(ctx, ctx.attr.shared[0][CcSharedLibraryInfo], ctx.outputs.output_file, ctx.attr.deps[0]),
+        _correct_cc_shared_library_linking(ctx, ctx.attr.shared[0][CcSharedLibraryInfo], ctx.outputs.output_file),
         toc_info,
         # The _only_ linker_input is the statically linked root itself. We need to propagate this
         # as cc_shared_library identifies which libraries can be linked dynamically based on the
@@ -565,7 +559,7 @@ _bssl_hash_injection = rule(
             cfg = "exec",
             doc = "The BSSL hash injection tool.",
             executable = True,
-            default = "//prebuilts/build-tools:linux-x86/bin/bssl_inject_hash",
+            default = "//external/boringssl:bssl_inject_hash",
             allow_single_file = True,
         ),
     },

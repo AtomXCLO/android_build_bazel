@@ -110,8 +110,9 @@ def cc_binary(
         })
 
         # TODO(b/233660582): deal with the cases where the default lib shouldn't be used
-        whole_archive_deps = whole_archive_deps + select({
+        deps = deps + select({
             "//build/bazel/rules/cc:android_coverage_lib_flag": ["//system/extras/toolchain-extras:libprofile-clang-extras"],
+            "//build/bazel/rules/cc:android_coverage_lib_flag_cfi": ["//system/extras/toolchain-extras:libprofile-clang-extras_cfi_support"],
             "//conditions:default": [],
         })
 
@@ -197,6 +198,9 @@ def cc_binary(
         stamp_build_number = use_version_lib,
         tags = ["manual"],
         testonly = generate_cc_test,
+        # Potentially have internal cc_test dependency so keep
+        # --trim_test_configuration optimization working. See b/288969037 for more info
+        transitive_configs = ["//command_line_option/fragment:test"] if generate_cc_test else [],
     )
 
     stripped_cc_rule(

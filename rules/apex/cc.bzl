@@ -13,7 +13,6 @@
 # limitations under the License.
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//build/bazel/product_config:product_variables_providing_rule.bzl", "ProductVariablesInfo")
 load("//build/bazel/rules:metadata.bzl", "MetadataFileInfo")
 load("//build/bazel/rules/cc:cc_library_common.bzl", "parse_apex_sdk_version")
 load("//build/bazel/rules/cc:cc_library_shared.bzl", "CcSharedLibraryOutputInfo", "CcStubLibrariesInfo")
@@ -192,7 +191,7 @@ This apex should likely use stubs of the target instead." % (target, ctx.attr._a
             # If a stub library is in the "provides" of the apex, it doesn't need to be in the "requires"
             if not is_apex_direct_dep(source_library_label, ctx):
                 requires.append(source_library_label)
-                if not ctx.attr._product_variables[ProductVariablesInfo].Unbundled_build and not _installed_to_bootstrap(source_library_label):
+                if not ctx.attr._unbundled_build[BuildSettingInfo].value and not _installed_to_bootstrap(source_library_label):
                     # It's sufficient to pass the make module name, not the fully qualified bazel label.
                     make_modules_to_install.append(source_library_label.name)
 
@@ -229,12 +228,9 @@ This apex should likely use stubs of the target instead." % (target, ctx.attr._a
         if hasattr(ctx.rule.attr, "shared"):
             transitive_deps.append(ctx.rule.attr.shared[0])
     elif ctx.rule.kind in ["cc_shared_library", "cc_binary"]:
-        # Propagate along the dynamic_deps and deps edges for binaries and shared libs
+        # Propagate along the dynamic_deps edges for binaries and shared libs
         if hasattr(ctx.rule.attr, "dynamic_deps"):
             for dep in ctx.rule.attr.dynamic_deps:
-                transitive_deps.append(dep)
-        if hasattr(ctx.rule.attr, "deps"):
-            for dep in ctx.rule.attr.deps:
                 transitive_deps.append(dep)
     elif ctx.rule.kind in rules_propagate_src and hasattr(ctx.rule.attr, "src"):
         # Propagate along the src edge
@@ -243,7 +239,9 @@ This apex should likely use stubs of the target instead." % (target, ctx.attr._a
         else:
             transitive_deps.append(ctx.rule.attr.src)
 
-    if ctx.rule.kind in ["stripped_binary", "_cc_library_shared_proxy", "_cc_library_combiner"] and hasattr(ctx.rule.attr, "runtime_deps"):
+    # We only collect runtime dependencies from binaries and shared libraries,
+    # we _explicitly_ omit static libraries (kind = _cc_library_combiner)
+    if ctx.rule.kind in ["stripped_binary", "_cc_library_shared_proxy"] and hasattr(ctx.rule.attr, "runtime_deps"):
         for dep in ctx.rule.attr.runtime_deps:
             unstripped = None
             if CcUnstrippedInfo in dep:
@@ -301,7 +299,7 @@ apex_cc_aspect = aspect(
         "_apex_direct_deps": attr.label(default = "//build/bazel/rules/apex:apex_direct_deps"),
         "_apex_name": attr.label(default = "//build/bazel/rules/apex:apex_name"),
         "_min_sdk_version": attr.label(default = "//build/bazel/rules/apex:min_sdk_version"),
-        "_product_variables": attr.label(default = "//build/bazel/product_config:product_vars"),
+        "_unbundled_build": attr.label(default = "//build/bazel/product_config:unbundled_build"),
     },
     attr_aspects = CC_ATTR_ASPECTS,
     requires = [license_aspect],

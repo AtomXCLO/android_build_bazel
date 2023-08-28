@@ -15,7 +15,6 @@
 # limitations under the License.
 """Utility functions to produce module or module type dependency graphs using json-module-graph or queryview."""
 
-from typing import Set
 import collections
 import dataclasses
 import json
@@ -23,12 +22,21 @@ import os
 import os.path
 import subprocess
 import sys
+from typing import Optional, Set
 import xml.etree.ElementTree
+from bp2build_metrics_proto.bp2build_metrics_pb2 import Bp2BuildMetrics
+
+
+@dataclasses.dataclass(frozen=True, order=True)
+class TargetProduct:
+  product: Optional[str] = None
+  banchan_mode: bool = False
 
 
 @dataclasses.dataclass(frozen=True, order=True)
 class _ModuleKey:
   """_ModuleKey uniquely identifies a module by name nad variations."""
+
   name: str
   variations: list
 
@@ -78,7 +86,10 @@ _TOOLCHAIN_DEP_TYPES = frozenset([
     "python.dependencyTag {BaseDependencyTag:{} name:hostLauncherSharedLib}",
     "python.dependencyTag {BaseDependencyTag:{} name:hostStdLib}",
     "python.dependencyTag {BaseDependencyTag:{} name:launcher}",
-    "python.installDependencyTag {BaseDependencyTag:{} InstallAlwaysNeededDependencyTag:{} name:launcherSharedLib}",
+    (
+        "python.installDependencyTag {BaseDependencyTag:{}"
+        " InstallAlwaysNeededDependencyTag:{} name:launcherSharedLib}"
+    ),
 ])
 
 SRC_ROOT_DIR = os.path.abspath(__file__ + "/../../../../..")
@@ -99,7 +110,11 @@ BANCHAN_ENV = {
 }
 
 
-def _build_with_soong(target, banchan_mode=False):
+def _build_with_soong(target, target_product):
+  env = BANCHAN_ENV if target_product.banchan_mode else LUNCH_ENV
+  if target_product.product:
+    env["TARGET_PRODUCT"] = target_product.product
+
   subprocess.check_output(
       [
           "build/soong/soong_ui.bash",
@@ -108,7 +123,7 @@ def _build_with_soong(target, banchan_mode=False):
           target,
       ],
       cwd=SRC_ROOT_DIR,
-      env=BANCHAN_ENV if banchan_mode else LUNCH_ENV,
+      env=env,
   )
 
 
@@ -120,13 +135,16 @@ def get_properties(json_module):
     return set_properties
   if "SetProperties" not in json_module["Module"]["Android"]:
     return set_properties
+  if json_module["Module"]["Android"]["SetProperties"] is None:
+    return set_properties
 
-  for prop in json_module['Module']['Android']['SetProperties']:
+  for prop in json_module["Module"]["Android"]["SetProperties"]:
     if prop["Values"]:
       value = prop["Values"]
     else:
       value = prop["Value"]
     set_properties[prop["Name"]] = value
+
   return set_properties
 
 
@@ -134,9 +152,9 @@ def get_property_names(json_module):
   return get_properties(json_module).keys()
 
 
-def get_queryview_module_info_by_type(types, banchan_mode):
+def get_queryview_module_info_by_type(types, target_product):
   """Returns the list of transitive dependencies of input module as built by queryview."""
-  _build_with_soong("queryview", banchan_mode)
+  _build_with_soong("queryview", target_product)
 
   queryview_xml = subprocess.check_output(
       [
@@ -146,8 +164,9 @@ def get_queryview_module_info_by_type(types, banchan_mode):
           "--config=queryview",
           "--output=xml",
           # union of queries to get the deps of all Soong modules with the give names
-          " + ".join(f'deps(attr("soong_module_type", "^{t}$", //...))'
-                     for t in types)
+          " + ".join(
+              f'deps(attr("soong_module_type", "^{t}$", //...))' for t in types
+          ),
       ],
       cwd=SRC_ROOT_DIR,
   )
@@ -159,9 +178,9 @@ def get_queryview_module_info_by_type(types, banchan_mode):
 ParseError: {err}""")
 
 
-def get_queryview_module_info(modules, banchan_mode):
+def get_queryview_module_info(modules, target_product):
   """Returns the list of transitive dependencies of input module as built by queryview."""
-  _build_with_soong("queryview", banchan_mode)
+  _build_with_soong("queryview", target_product)
 
   queryview_xml = subprocess.check_output(
       [
@@ -171,8 +190,10 @@ def get_queryview_module_info(modules, banchan_mode):
           "--config=queryview",
           "--output=xml",
           # union of queries to get the deps of all Soong modules with the give names
-          " + ".join(f'deps(attr("soong_module_name", "^{m}$", //...))'
-                     for m in modules)
+          " + ".join(
+              f'deps(attr("soong_module_name", "^{m}$", //...))'
+              for m in modules
+          ),
       ],
       cwd=SRC_ROOT_DIR,
   )
@@ -184,11 +205,11 @@ def get_queryview_module_info(modules, banchan_mode):
 ParseError: {err}""")
 
 
-def get_json_module_info(banchan_mode=False):
+def get_json_module_info(target_product=None):
   """Returns the list of transitive dependencies of input module as provided by Soong's json module graph."""
-  _build_with_soong("json-module-graph", banchan_mode)
+  _build_with_soong("json-module-graph", target_product)
   try:
-    with open(os.path.join(SRC_ROOT_DIR,"out/soong/module-graph.json")) as f:
+    with open(os.path.join(SRC_ROOT_DIR, "out/soong/module-graph.json")) as f:
       return json.load(f)
   except json.JSONDecodeError as err:
     sys.exit(f"""Could not decode json:
@@ -196,21 +217,21 @@ out/soong/module-graph.json
 JSONDecodeError: {err}""")
 
 
-def _ignore_json_module(json_module, ignore_by_name):
+def ignore_json_module(json_module, ignore_by_name):
   # windows is not a priority currently
   if is_windows_variation(json_module):
     return True
-  if ignore_kind(json_module['Type']):
+  if ignore_kind(json_module["Type"]):
     return True
-  if json_module['Name'] in ignore_by_name:
+  if json_module["Name"] in ignore_by_name:
     return True
   # for filegroups with a name the same as the source, we are not migrating the
   # filegroup and instead just rely on the filename being exported
-  if json_module['Type'] == 'filegroup':
+  if json_module["Type"] == "filegroup":
     set_properties = get_properties(json_module)
-    srcs = set_properties.get('Srcs', [])
+    srcs = set_properties.get("Srcs", [])
     if len(srcs) == 1:
-      return json_module['Name'] in srcs
+      return json_module["Name"] in srcs
   return False
 
 
@@ -224,16 +245,16 @@ def visit_json_module_graph_post_order(
   # name to all module variants
   module_graph_map = {}
   root_module_keys = []
-  name_to_keys = collections.defaultdict(set)
+  name_to_keys = collections.defaultdict(list)
 
   # Do a single pass to find all top-level modules to be ignored
   for module in module_graph:
     name = module["Name"]
     key = _ModuleKey(name, module["Variations"])
-    if _ignore_json_module(module, ignore_by_name):
+    if ignore_json_module(module, ignore_by_name):
       ignored.add(key)
       continue
-    name_to_keys[name].add(key)
+    name_to_keys[name].append(key)
     module_graph_map[key] = module
     if filter_predicate(module):
       root_module_keys.append(key)
@@ -248,7 +269,6 @@ def visit_json_module_graph_post_order(
     deps = set()
     module = module_graph_map[module_key]
     created_by = module["CreatedBy"]
-    to_visit = set()
 
     if created_by:
       for key in name_to_keys[created_by]:
@@ -260,38 +280,55 @@ def visit_json_module_graph_post_order(
         deps.add(created_by)
         json_module_graph_post_traversal(key)
 
-    for dep in module["Deps"]:
-      if ignore_json_dep(
-          dep, module["Name"], ignored, ignore_java_auto_deps
-      ):
+    # collect all variants and dependencies from those variants
+    # we want to visit all deps before other variants
+    all_variants = {}
+    all_deps = []
+    for k in name_to_keys[module["Name"]]:
+      visited.add(k)
+      m = module_graph_map[k]
+      all_variants[k] = m
+      all_deps.extend(m["Deps"])
+
+    deps_visited = set()
+    for dep in all_deps:
+      dep_name = dep["Name"]
+      dep_key = _ModuleKey(dep_name, dep["Variations"])
+      # only check if we need to ignore or visit each dep once but it might
+      # appear multiple times due to different variants
+      if dep_key in deps_visited:
+        continue
+      deps_visited.add(dep_key)
+
+      if ignore_json_dep(dep, module["Name"], ignored, ignore_java_auto_deps):
         continue
 
-      dep_name = dep["Name"]
       deps.add(dep_name)
-      dep_key = _ModuleKey(dep_name, dep["Variations"])
+      json_module_graph_post_traversal(dep_key)
 
-      if dep_key not in visited:
-        json_module_graph_post_traversal(dep_key)
-
-    visit(module, deps)
+    for k, m in all_variants.items():
+      visit(m, deps)
 
   for module_key in root_module_keys:
     json_module_graph_post_traversal(module_key)
 
 
-QueryviewModule = collections.namedtuple("QueryviewModule", [
-    "name",
-    "kind",
-    "variant",
-    "dirname",
-    "deps",
-    "srcs",
-])
+QueryviewModule = collections.namedtuple(
+    "QueryviewModule",
+    [
+        "name",
+        "kind",
+        "variant",
+        "dirname",
+        "deps",
+        "srcs",
+    ],
+)
 
 
 def _bazel_target_to_dir(full_target):
   dirname, _ = full_target.split(":")
-  return dirname[len("//"):]  # discard prefix
+  return dirname[len("//") :]  # discard prefix
 
 
 def _get_queryview_module(name_with_variant, module, kind):
@@ -335,8 +372,9 @@ def _ignore_queryview_module(module, ignore_by_name):
   return module.variant.startswith("windows")
 
 
-def visit_queryview_xml_module_graph_post_order(module_graph, ignored_by_name,
-                                                filter_predicate, visit):
+def visit_queryview_xml_module_graph_post_order(
+    module_graph, ignored_by_name, filter_predicate, visit
+):
   # The set of ignored modules. These modules (and their dependencies) are
   # not shown in the graph or report.
   ignored = set()
@@ -396,29 +434,46 @@ def visit_queryview_xml_module_graph_post_order(module_graph, ignored_by_name,
     queryview_module_graph_post_traversal(name_with_variant)
 
 
-def get_bp2build_converted_modules() -> Set[str]:
-  """ Returns the list of modules that bp2build can currently convert. """
-  _build_with_soong("bp2build")
+def get_bp2build_converted_modules(target_product) -> Set[str]:
+  """Returns the list of modules that bp2build can currently convert."""
+  _build_with_soong("bp2build", target_product)
   # Parse the list of converted module names from bp2build
   with open(
-      os.path.join(SRC_ROOT_DIR,
-                   "out/soong/soong_injection/metrics/converted_modules.txt"),
-      "r") as f:
+      os.path.join(
+          SRC_ROOT_DIR,
+          "out/soong/soong_injection/metrics/converted_modules.txt",
+      ),
+      "r",
+  ) as f:
     # Read line by line, excluding comments.
     # Each line is a module name.
     ret = set(line.strip() for line in f if not line.strip().startswith("#"))
   return ret
 
 
-def get_json_module_type_info(module_type):
+def get_bp2build_metrics(bp2build_metrics_location):
+  """Returns the bp2build metrics"""
+  bp2build_metrics = Bp2BuildMetrics()
+  with open(
+      os.path.join(bp2build_metrics_location, "bp2build_metrics.pb"), "rb"
+  ) as f:
+    bp2build_metrics.ParseFromString(f.read())
+    f.close()
+  return bp2build_metrics
+
+
+def get_json_module_type_info(module_type, target_product=None):
   """Returns the combined transitive dependency closures of all modules of module_type."""
-  _build_with_soong("json-module-graph")
+  if target_product is None:
+    target_product = TargetProduct(banchan_mode=False)
+  _build_with_soong("json-module-graph", target_product)
   # Run query.sh on the module graph for the top level module type
   result = subprocess.check_output(
       [
           "build/bazel/json_module_graph/query.sh",
-          "fullTransitiveModuleTypeDeps", "out/soong/module-graph.json",
-          module_type
+          "fullTransitiveModuleTypeDeps",
+          "out/soong/module-graph.json",
+          module_type,
       ],
       cwd=SRC_ROOT_DIR,
   )
@@ -458,6 +513,7 @@ def is_prebuilt_to_source_dep(dep):
 
 def _is_toolchain_dep(dep):
   return dep["Tag"] in _TOOLCHAIN_DEP_TYPES
+
 
 def _is_java_auto_dep(dep):
   # Soong adds a number of dependencies automatically for Java deps, making it
@@ -502,7 +558,7 @@ def ignore_json_dep(dep, module_name, ignored_keys, ignore_java_auto_deps):
     return True
   if _is_toolchain_dep(dep):
     return True
-  elif dep["Name"] == 'py3-stdlib':
+  elif dep["Name"] == "py3-stdlib":
     return True
   if ignore_java_auto_deps and _is_java_auto_dep(dep):
     return True

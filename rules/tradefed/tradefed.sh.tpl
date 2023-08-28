@@ -1,11 +1,17 @@
 #!/bin/bash
 set -e
 
-TEST_PATH="${TEST_SRCDIR}"
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-PATH_ADDITIONS="{PATH_ADDITIONS}"
+ATEST_TF_LAUNCHER="{atest_tradefed_launcher}"
+ATEST_HELPER="{atest_helper}"
+TRADEFED_CLASSPATH="{tradefed_classpath}"
+PATH_ADDITIONS="{path_additions}"
+read -a ADDITIONAL_TRADEFED_OPTIONS <<< "{additional_tradefed_options}"
 
-export PATH="$SCRIPT_DIR:${PATH}"
+export PATH="${PATH_ADDITIONS}:${PATH}"
+export ATEST_HELPER="${ATEST_HELPER}"
+export TF_PATH="${TRADEFED_CLASSPATH}"
+
 # Prepend the REMOTE_JAVA_HOME environment variable to the path to ensure
 # that all Java invocations throughout the test execution flow use the same
 # version.
@@ -15,10 +21,10 @@ fi
 
 exit_code_file="$(mktemp /tmp/tf-exec-XXXXXXXXXX)"
 
-atest_tradefed.sh template/atest_local_min \
+"${ATEST_TF_LAUNCHER}" template/atest_local_min \
     --template:map test=atest \
     --template:map reporters="${SCRIPT_DIR}/result-reporters.xml" \
-    --tests-dir "$TEST_PATH" \
+    --tests-dir "$TEST_SRCDIR/__main__/{root_relative_tests_dir}" \
     --logcat-on-failure \
     --no-enable-granular-attempts \
     --no-early-device-release \
@@ -28,7 +34,6 @@ atest_tradefed.sh template/atest_local_min \
     "${ADDITIONAL_TRADEFED_OPTIONS[@]}" \
     --bazel-exit-code-result-reporter:file=${exit_code_file} \
     --bazel-xml-result-reporter:file=${XML_OUTPUT_FILE} \
-    --proto-output-file="${TEST_UNDECLARED_OUTPUTS_DIR}/proto-results" \
     --log-file-path="${TEST_UNDECLARED_OUTPUTS_DIR}" \
     "$@"
 

@@ -44,6 +44,12 @@ local_repository(
     path = "build/bazel_common_rules/rules/python/stubs",
 )
 
+local_repository(
+    name = "rules_cc",
+    # TODO(b/200202912): Re-route this when rules_cc is pulled into AOSP.
+    path = "build/bazel/rules/cc/stub_rules_cc",
+)
+
 register_toolchains(
     "//prebuilts/build-tools:py_toolchain",
 
@@ -128,11 +134,10 @@ local_repository(
     path = "prebuilts/bazel/common/android_tools",
 )
 
-# The rules_java repository is stubbed and points to the native Java rules until
-# it can be properly vendored.
+# The vendored rules_java repository.
 local_repository(
     name = "rules_java",
-    path = "build/bazel_common_rules/rules/java/rules_java",
+    path = "external/bazelbuild-rules_java",
 )
 
 register_toolchains(
@@ -160,7 +165,7 @@ new_local_repository(
     path = "external/kotlinc",
 )
 
-register_toolchains("@rules_kotlin//toolchains/kotlin_jvm:kt_jvm_toolchain")
+register_toolchains("@rules_kotlin//toolchains/kotlin_jvm:kt_jvm_toolchain_linux")
 
 load("//prebuilts/clang/host/linux-x86:cc_toolchain_config.bzl", "cc_register_toolchains")
 

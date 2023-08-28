@@ -1,4 +1,6 @@
-# Copyright (C) 2022 The Android Open Source Project
+#!/bin/bash -e
+
+# Copyright (C) 2023 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,12 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+source $(cd $(dirname $BASH_SOURCE) &> /dev/null && pwd)/../../make/shell_utils.sh
+require_top
 
-package(default_visibility = ["//visibility:public"])
-
-# TODO(b/194644518): Switch to the source version when Bazel can build go
-# binaries.
-alias(
-    name = "bazel_notice_gen",
-    actual = "//prebuilts/build-tools:linux-x86/bin/bazel_notice_gen",
-)
+aconfig="$ANDROID_SOONG_HOST_OUT"/bin/aconfig
+flags_file="$(getoutdir)"/soong/.intermediates/all_aconfig_declarations.pb
+if [[ ! -f "$aconfig" || ! -f "$flags_file" ]]; then
+   echo "Missing dependencies: please run 'm all_aconfig_declarations' and try again."
+   exit 1
+fi
+$aconfig dump --cache $flags_file $@

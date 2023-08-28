@@ -228,6 +228,7 @@ def _sign_bundle(ctx, aapt2, avbtool, module_name, bundle_file, apex_info):
                     ctx.executable._deapexer.dirname,
                     avbtool.files_to_run.executable.dirname,
                     ctx.executable._openssl.dirname,
+                    ctx.executable._zip2zip.dirname,
                     java_bin,
                 ],
             ),
@@ -379,7 +380,7 @@ _apex_aab = rule(
             allow_single_file = True,
             cfg = "exec",
             executable = True,
-            default = "//prebuilts/build-tools:linux-x86/bin/merge_zips",
+            default = "//build/soong/cmd/merge_zips",
         ),
         "_openssl": attr.label(
             allow_single_file = True,

@@ -26,8 +26,8 @@ load("//build/bazel/rules/cc:cc_library_headers.bzl", "cc_library_headers")
 load("//build/bazel/rules/cc:cc_library_shared.bzl", "cc_library_shared")
 load("//build/bazel/rules/cc:cc_library_static.bzl", "cc_library_static")
 load("//build/bazel/rules/cc:cc_stub_library.bzl", "cc_stub_suite")
-load("//build/bazel/rules/test_common:rules.bzl", "expect_failure_test", "target_under_test_exist_test")
 load("//build/bazel/rules/test_common:flags.bzl", "action_flags_present_only_for_mnemonic_test")
+load("//build/bazel/rules/test_common:rules.bzl", "expect_failure_test", "target_under_test_exist_test")
 load(":apex_deps_validation.bzl", "ApexDepsInfo", "apex_dep_infos_to_allowlist_strings")
 load(":apex_info.bzl", "ApexInfo", "ApexMkInfo")
 load(":apex_test_helpers.bzl", "test_apex")
@@ -437,7 +437,6 @@ def _test_canned_fs_config_runtime_deps():
             "/apex_manifest.pb 1000 1000 0644",
             "/lib{64_OR_BLANK}/%s_runtime_dep_1.so 1000 1000 0644" % name,
             "/lib{64_OR_BLANK}/%s_runtime_dep_2.so 1000 1000 0644" % name,
-            "/lib{64_OR_BLANK}/%s_runtime_dep_3.so 1000 1000 0644" % name,
             "/lib{64_OR_BLANK}/libc++.so 1000 1000 0644",
             "/bin/%s_bin_cc 0 2000 0755" % name,
             "/bin 0 2000 0755",
@@ -503,7 +502,7 @@ apex_manifest_global_min_sdk_current_test = analysistest.make(
 
 apex_manifest_global_min_sdk_override_tiramisu_test = analysistest.make(
     config_settings = {
-        "@//build/bazel/rules/apex:apex_global_min_sdk_version_override": "Tiramisu",
+        "//command_line_option:platforms": "@//build/bazel/tests/products:aosp_arm64_for_testing_min_sdk_version_override_tiramisu",
         "@//build/bazel/rules/apex:unbundled_build_target_sdk_with_api_fingerprint": False,
     },
     **apex_manifest_test_attr
@@ -1468,7 +1467,7 @@ min_sdk_version_apex_inherit_test = analysistest.make(
 
 min_sdk_version_apex_inherit_override_min_sdk_tiramisu_test = analysistest.make(
     config_settings = {
-        "@//build/bazel/rules/apex:apex_global_min_sdk_version_override": "Tiramisu",
+        "//command_line_option:platforms": "@//build/bazel/tests/products:aosp_arm64_for_testing_min_sdk_version_override_tiramisu",
     },
     **min_sdk_version_apex_inherit_test_attrs
 )

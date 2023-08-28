@@ -11,13 +11,6 @@ build --incompatible_enable_cc_toolchain_resolution
 build --tool_java_runtime_version=jdk17
 build --java_runtime_version=jdk17
 
-# Disable errorprone to continue making progress on java and android conversion
-# while we determine how errorprone will be handled in Bazel-only builds b/227504307.
-# TODO(b/227504307): Remove --javacopt="-XepDisableAllChecks" after implementing
-# the correct solution around errorprone.
-build --javacopt="-XepDisableAllChecks"
-build --host_javacopt="-XepDisableAllChecks"
-
 # Lock down the PATH variable in actions to /usr/bin and /usr/local/bin.
 build --experimental_strict_action_env
 
@@ -107,6 +100,8 @@ build --compilation_mode=opt
 
 common --incompatible_remove_rule_name_parameter=false
 
+common --override_repository=rules_java_builtin=%workspace%/external/bazelbuild-rules_java
+
 # TODO(b/264304464): Remove when bugs with java_binary starlark impl are fixed.
 
 common --experimental_builtins_injection_override=-java_binary
@@ -148,3 +143,16 @@ build --incompatible_visibility_private_attributes_at_definition
 # Some targets in rules_go use config_setting(s) that are not visible to them
 # TODO -  b/289074954: Fix the visibility defs in rules_go and re-enable this enforcement.
 build --incompatible_enforce_config_setting_visibility=false
+
+# By default, b test will run all tests regardless of deviceless or device variants.
+# Use these configs to filter the tests to run, e.g. b test //system/... --config=deviceless_tests
+# The filter value is the name of the rule, but without the "_test" suffix.
+test:deviceless_tests --test_lang_filters=tradefed_deviceless
+test:device_tests --test_lang_filters=tradefed_device_driven,tradefed_host_driven_device
+
+# Supporting cgo for building go code is not required
+# Disable it explcitly to prevent issues with C toolchain setup
+build --@io_bazel_rules_go//go/config:pure
+
+# Breaking bazel feature for the 7/25 release. b/292565910
+common --noincompatible_use_host_features
