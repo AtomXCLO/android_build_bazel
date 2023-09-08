@@ -12,19 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@//build/bazel/tests/products:product_labels.bzl", _test_product_labels = "product_labels")
 load("@soong_injection//product_config_platforms:product_labels.bzl", _product_labels = "product_labels")
 load("//build/bazel/platforms/arch/variants:constants.bzl", _arch_constants = "constants")
-load("//build/bazel/product_variables:constants.bzl", "constants")
 load(
-    "//prebuilts/clang/host/linux-x86:cc_toolchain_constants.bzl",
+    "//build/bazel/toolchains/clang/host/linux-x86:cc_toolchain_constants.bzl",
     "arch_to_variants",
     "variant_constraints",
     "variant_name",
 )
-load(":product_variables_providing_rule.bzl", "product_variables_providing_rule")
-
-all_android_product_labels = _product_labels + _test_product_labels
 
 # This dict denotes the suffixes for host platforms (keys) and the constraints
 # associated with them (values). Used in transitions and tests, in addition to
@@ -138,88 +133,6 @@ def _determine_target_arches_from_config(config):
         ))
     return arches
 
-def _product_variable_constraint_settings(variables):
-    constraints = []
-
-    local_vars = dict(variables)
-
-    # Native_coverage is not set within soong.variables, but is hardcoded
-    # within config.go NewConfig
-    local_vars["Native_coverage"] = (
-        local_vars.get("ClangCoverage", False) or
-        local_vars.get("GcovCoverage", False)
-    )
-
-    # Some attributes on rules are able to access the values of product
-    # variables via make-style expansion (like $(foo)). We collect the values
-    # of the relevant product variables here so that it can be passed to
-    # product_variables_providing_rule, which exports a
-    # platform_common.TemplateVariableInfo provider to allow the substitution.
-    attribute_vars = {}
-
-    def add_attribute_var(typ, var, value):
-        if typ == "bool":
-            attribute_vars[var] = "1" if value else "0"
-        elif typ == "list":
-            attribute_vars[var] = ",".join(value)
-        elif typ == "int":
-            attribute_vars[var] = str(value)
-        elif typ == "string":
-            attribute_vars[var] = value
-
-    # Generate constraints for Soong config variables (bool, value, string typed).
-    vendor_vars = local_vars.pop("VendorVars", default = {})
-    for (namespace, variables) in vendor_vars.items():
-        for (var, value) in variables.items():
-            # All vendor vars are Starlark string-typed, even though they may be
-            # boxed bools/strings/arbitrary printf'd values, like numbers, so
-            # we'll need to do some translation work here by referring to
-            # soong_injection's generated data.
-
-            if value == "":
-                # Variable is not set so skip adding this as a constraint.
-                continue
-
-            # Create the identifier for the constraint var (or select key)
-            config_var = namespace + "__" + var
-
-            # List of all soong_config_module_type variables.
-            if not config_var in constants.SoongConfigVariables:
-                continue
-
-            # Normalize all constraint vars (i.e. select keys) to be lowercased.
-            constraint_var = config_var.lower()
-
-            if config_var in constants.SoongConfigBoolVariables:
-                constraints.append("@//build/bazel/product_variables:" + constraint_var)
-            elif config_var in constants.SoongConfigStringVariables:
-                # The string value is part of the the select key.
-                constraints.append("@//build/bazel/product_variables:" + constraint_var + "__" + value.lower())
-            elif config_var in constants.SoongConfigValueVariables:
-                # For value variables, providing_vars add support for substituting
-                # the value using TemplateVariableInfo.
-                constraints.append("@//build/bazel/product_variables:" + constraint_var)
-                add_attribute_var("string", constraint_var, value)
-
-    for (var, value) in local_vars.items():
-        # TODO(b/187323817): determine how to handle remaining product
-        # variables not used in product_variables
-        constraint_var = var.lower()
-        if not constants.ProductVariables.get(constraint_var):
-            continue
-
-        # variable.go excludes nil values
-        add_constraint = (value != None)
-        add_attribute_var(type(value), var, value)
-        if type(value) == "bool":
-            # variable.go special cases bools
-            add_constraint = value
-
-        if add_constraint:
-            constraints.append("@//build/bazel/product_variables:" + constraint_var)
-
-    return constraints, attribute_vars
-
 def _define_platform_for_arch(name, common_constraints, arch, secondary_arch = None):
     if secondary_arch == None:
         # When there is no secondary arch, we'll pretend it exists but is the same as the primary arch
@@ -249,24 +162,23 @@ def _define_platform_for_arch_with_secondary(name, common_constraints, arch, sec
 
 def _verify_product_is_registered(name):
     """
-    Verifies that this android_product() is listed in all_android_product_labels.
+    Verifies that this android_product() is listed in _product_labels.
 
-    all_android_product_labels is used to build a select statement from each product to its
-    _product_vars rule. This is because we store most product configuration in a rule instead of
-    constraint settings or build settings due to limitations in bazel. (constraint settings can't
-    be unbounded, typed, or have dependencies, build settings can't be set with --platforms)
+    _product_labels is used to build a platform_mappings file entry from each product to its
+    build settings. This is because we store most product configuration in build settings, and
+    currently the only way to set build settings based on a certain platform is with a
+    platform_mappings file.
     """
     my_label = native.repository_name() + "//" + native.package_name() + ":" + name
-    for label in all_android_product_labels:
+    for label in _product_labels:
         if my_label == label:
             return
-    fail("All android_product() instances must be listed in all_android_product_labels in " +
-         "//build/bazel/product_config/android_product.bzl. By default the products generated " +
-         "from legacy android product configurations are included, additional platforms (like " +
-         "testing-specific platforms) must be manually listed in " +
-         "//build/bazel/tests/products/product_labels.bzl.")
+    fail("All android_product() instances must have an entry in the platform_mappings file " +
+         "generated by bp2build. By default the products generated from legacy android product " +
+         "configurations and products listed in //build/bazel/tests/products:product_labels.bzl " +
+         "are included.")
 
-def android_product(name, *, soong_variables, extra_constraints = []):
+def android_product(*, name, soong_variables, extra_constraints = []):
     """
     android_product integrates product variables into Bazel platforms.
 
@@ -284,21 +196,9 @@ def android_product(name, *, soong_variables, extra_constraints = []):
     """
     _verify_product_is_registered(name)
 
-    product_var_constraints, attribute_vars = _product_variable_constraint_settings(soong_variables)
     arch_configs = _determine_target_arches_from_config(soong_variables)
 
-    product_variables_providing_rule(
-        name = name + "_product_vars",
-        attribute_vars = attribute_vars,
-        product_vars = soong_variables,
-    )
-
-    native.constraint_value(
-        name = name + "_constraint_value",
-        constraint_setting = "@//build/bazel/product_config:current_product",
-    )
-
-    common_constraints = extra_constraints + product_var_constraints + [name + "_constraint_value"]
+    common_constraints = extra_constraints
 
     # TODO(b/258802089): figure out how to deal with multiple arches for target
     if len(arch_configs) > 0:

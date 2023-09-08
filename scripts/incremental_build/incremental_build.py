@@ -40,14 +40,13 @@ import pretty
 import ui
 import util
 from cuj import skip_for
-from pretty import Aggregation
 from util import BuildInfo
 from util import BuildResult
 from util import BuildType
 
 MAX_RUN_COUNT: Final[int] = 5
 BAZEL_PROFILES: Final[str] = "bazel_metrics"
-CQUERY_OUT = "soong/soong_injection/cquery.out"
+CQUERY_OUT: Final[str] = "soong/soong_injection/cquery.out"
 
 
 @functools.cache
@@ -110,6 +109,7 @@ def _recompact_ninja_log(f: TextIO):
         shell=False,
         stdout=f,
         stderr=f,
+        text=True,
     )
 
 
@@ -135,6 +135,28 @@ def _pretty_env(env: Mapping[str, str]) -> str:
     return "\n".join(env_copy)
 
 
+def _total_size(filetype: str) -> int | None:
+    match filetype:
+        case "Android.bp":
+            top = util.get_top_dir().resolve()
+            out = util.get_out_dir().resolve()
+            ignore_out = f'-not -path "{out}" ' if out.is_relative_to(top) else ""
+            cmd = f'find {top} -name Android.bp {ignore_out} | xargs stat -L -c "%s"'
+        case "BUILD.bazel":
+            ws = util.get_out_dir().joinpath("soong", "workspace")
+            cmd = f'find {ws} -name BUILD.bazel | xargs stat -L -c "%s"'
+        case _:
+            raise RuntimeError(f"Android.bp or BUILD.bazel expected: {filetype}")
+    logging.debug(f"Running {cmd}")
+    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+    if p.returncode:
+        logging.error(
+            "Failed to compute total size of %s files:\n%s", filetype, p.stderr
+        )
+        return None
+    return sum(int(line) for line in p.stdout.splitlines())
+
+
 def _build(build_type: BuildType, run_dir: Path) -> BuildInfo:
     logfile = run_dir.joinpath("output.txt")
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -142,7 +164,20 @@ def _build(build_type: BuildType, run_dir: Path) -> BuildInfo:
     env = _prepare_env()
     target_product = env["TARGET_PRODUCT"]
 
-    with open(logfile, mode="w") as f:
+    cquery_out = util.get_out_dir().joinpath("soong/soong_injection/cquery.out")
+
+    def get_cquery_ts() -> float:
+        try:
+            return os.stat(cquery_out).st_mtime
+        except FileNotFoundError:
+            return -1
+
+    @skip_for(BuildType.SOONG_ONLY, BuildType.B, BuildType.B_ANDROID)
+    def get_cquery_size() -> int:
+        return os.stat(cquery_out).st_size if cquery_out.exists() else None
+
+    cquery_ts = get_cquery_ts()
+    with open(logfile, mode="wt") as f:
         action_count_before = _new_action_count()
         if action_count_before > 0:
             _recompact_ninja_log(f)
@@ -170,12 +205,21 @@ def _build(build_type: BuildType, run_dir: Path) -> BuildInfo:
         with open(run_dir.joinpath("new_ninja_actions.txt"), "w") as af:
             action_count_delta = _new_action_count(af, action_count_before)
 
+    if get_cquery_ts() > cquery_ts:
+        shutil.copy(cquery_out, run_dir.joinpath("cquery.out"))
+        bazel_profiles = util.get_out_dir().joinpath(BAZEL_PROFILES)
+        if bazel_profiles.exists():
+            shutil.copytree(bazel_profiles, run_dir.joinpath(BAZEL_PROFILES))
+
     return BuildInfo(
         actions=action_count_delta,
+        bp_size_total=_total_size("Android.bp"),
         build_type=build_type,
         build_result=BuildResult.FAILED if p.returncode else BuildResult.SUCCESS,
         build_ninja_hash=_build_file_sha(target_product),
         build_ninja_size=_build_file_size(target_product),
+        bz_size_total=_total_size("BUILD.bazel"),
+        cquery_out_size=get_cquery_size(),
         description="<placeholder>",
         product=f'{target_product}-{env["TARGET_BUILD_VARIANT"]}',
         targets=ui.get_user_input().targets,
@@ -186,34 +230,14 @@ def _build(build_type: BuildType, run_dir: Path) -> BuildInfo:
 def _run_cuj(
     run_dir: Path, build_type: ui.BuildType, cujstep: cuj_catalog.CujStep
 ) -> BuildInfo:
-    cquery_out = util.get_out_dir().joinpath("soong/soong_injection/cquery.out")
-
-    def get_cquery_ts() -> float:
-        try:
-            return os.stat(cquery_out).st_mtime
-        except FileNotFoundError:
-            return -1
-
-    @skip_for(BuildType.SOONG_ONLY)
-    def get_cquery_size() -> int:
-        return os.path.getsize(cquery_out)
-
-    cquery_ts = get_cquery_ts()
     build_info: Final[BuildInfo] = _build(build_type, run_dir)
     # if build was successful, run test
-    build_info.targets = ui.get_user_input().targets
     if build_info.build_result == BuildResult.SUCCESS:
         try:
             cujstep.verify()
         except Exception as e:
-            logging.error(e)
+            logging.exception(e)
             build_info.build_result = BuildResult.TEST_FAILURE
-    build_info.cquery_out_size = get_cquery_size()
-    if get_cquery_ts() > cquery_ts:
-        shutil.copy(cquery_out, run_dir.joinpath("cquery.out"))
-        bazel_profiles = util.get_out_dir().joinpath(BAZEL_PROFILES)
-        if bazel_profiles.exists():
-            shutil.copytree(bazel_profiles, run_dir.joinpath(BAZEL_PROFILES))
 
     return build_info
 
@@ -221,6 +245,8 @@ def _run_cuj(
 def _display(prop_regex: str):
     user_input = ui.get_user_input()
     metrics = user_input.log_dir.joinpath(util.METRICS_TABLE)
+    if not metrics.exists():
+        perf_metrics.tabulate_metrics_csv(user_input.log_dir)
     perf_metrics.display_tabulated_metrics(user_input.log_dir, user_input.ci_mode)
     pretty.summarize(
         metrics,
@@ -244,16 +270,15 @@ def main():
           collect metrics
     """
     user_input = ui.get_user_input()
-
     logging.warning(
         textwrap.dedent(
-            f"""
-  If you kill this process, make sure to revert unwanted changes.
-  TIP: If you have no local changes of interest you may
-       `repo forall -p -c git reset --hard`  and
-       `repo forall -p -c git clean --force` and even
-       `m clean && rm -rf {util.get_out_dir()}`
-  """
+            f"""\
+             If you kill this process, make sure to revert unwanted changes.
+             TIP: If you have no local changes of interest you may
+                  `repo forall -p -c git reset --hard`  and
+                  `repo forall -p -c git clean --force` and even
+                  `m clean && rm -rf {util.get_out_dir()}`
+             """
         )
     )
 
@@ -270,7 +295,6 @@ def main():
         for cujstep in cuj_group.steps:
             desc = cujstep.verb
             desc = f"{desc} {cuj_group.description}".strip()
-            desc = f"{desc} {user_input.description}".strip()
             logging.info(
                 "********* %s %s [%s] **********",
                 build_type.name,
@@ -291,6 +315,7 @@ def main():
                 )
                 build_info.warmup = cuj_group == cuj_catalog.Warmup
                 build_info.rebuild = run != 0
+                build_info.tag = user_input.tag
 
                 logging.info(json.dumps(build_info, indent=2, cls=util.CustomEncoder))
 
@@ -300,7 +325,7 @@ def main():
                     if logs_dir_for_ci.exists():
                         perf_metrics.archive_run(logs_dir_for_ci, build_info)
 
-                if build_info.build_result == BuildResult.FAILED:
+                if build_info.build_result != BuildResult.SUCCESS:
                     stop_building = StopBuilding.DUE_TO_ERROR
                     logging.critical(f"Failed cuj run! Please see logs in: {run_dir}")
                 elif run == MAX_RUN_COUNT - 1:
@@ -308,8 +333,6 @@ def main():
                     logging.critical(f"Build did not stabilize in {run} attempts")
 
                 perf_metrics.archive_run(run_dir, build_info)
-                # we are doing tabulation and summary after each run
-                # so that we can look at intermediate results
                 perf_metrics.tabulate_metrics_csv(user_input.log_dir)
                 if cuj_group != cuj_catalog.Warmup and run == 0:
                     _display("^time$")  # display intermediate results
@@ -323,11 +346,11 @@ def main():
     for build_type in user_input.build_types:
         util.CURRENT_BUILD_TYPE = build_type
         # warm-up run reduces variations attributable to OS caches
-        if not user_input.no_warmup:
+        if user_input.chosen_cujgroups and not user_input.no_warmup:
             run_cuj_group(cuj_catalog.Warmup)
         for i in user_input.chosen_cujgroups:
             run_cuj_group(cuj_catalog.get_cujgroups()[i])
-        _display(r"^(?:time|bp2build|soong_build/\*\.bazel)$")
+    _display(r"^(?:time|bp2build|soong_build/\*\.bazel)$")
 
 
 class InfoAndBelow(logging.Filter):

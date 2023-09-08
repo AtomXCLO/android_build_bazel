@@ -42,6 +42,7 @@ def _cc_proto_sources_gen_rule_impl(ctx):
         proto_infos.append(proto_info)
         if proto_info.proto_source_root == ".":
             includes.append(paths.join(ctx.label.name, ctx.label.package))
+
         includes.append(ctx.label.name)
 
     outs = _generate_cc_proto_action(

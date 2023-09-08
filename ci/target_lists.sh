@@ -58,14 +58,8 @@ TEST_TARGETS=(
 HOST_ONLY_TEST_TARGETS=(
   //tools/trebuchet:AnalyzerKt
   //tools/metalava:metalava
-  # TODO(b/268186228): adb_test fails only on CI
-  -//packages/modules/adb:adb_test
-  # TODO(b/268185249): libbase_test asserts on the Soong basename of the test
-  -//system/libbase:libbase_test__tf_deviceless_test
-  # TODO(b/290909930): "jemalloc5_stresstests did not report any run"
-  -//external/jemalloc_new:jemalloc5_stresstests__tf_deviceless_test
-  # TODO(b/290909364): "logplot_tests did not report any run"
-  -//system/media/audio_utils/tests:logplot_tests__tf_deviceless_test
+  # This is explicitly listed to prevent b/294514745
+  //packages/modules/adb:adb_test
   # TODO (b/282953338): these tests depend on adb which is unconverted
   -//packages/modules/adb:adb_integration_test_adb
   -//packages/modules/adb:adb_integration_test_device

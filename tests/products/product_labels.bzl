@@ -6,10 +6,6 @@ load("@bazel_skylib//lib:dicts.bzl", "dicts")
 
 products = {
     "aosp_arm_for_testing": _soong_variables_arm,
-    "aosp_arm_for_testing_custom_linker_alignment": dicts.add(
-        _soong_variables_arm,
-        {"DeviceMaxPageSizeSupported": "65536"},
-    ),
     "aosp_arm64_for_testing": _soong_variables_arm64,
     "aosp_arm64_for_testing_custom_linker_alignment": dicts.add(
         _soong_variables_arm64,
@@ -31,7 +27,7 @@ products = {
                 "package_name_override_from_config:another.package",
             ],
             "CertificateOverrides": [
-                "apex_certificate_label_with_overrides:another",
+                "apex_certificate_label_with_overrides:apex_certificate_label_with_overrides_another_cert",
             ],
             "DefaultAppCertificate": "build/bazel/rules/apex/testdata/devkey",
         },

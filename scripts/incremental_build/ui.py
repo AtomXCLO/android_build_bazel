@@ -20,7 +20,6 @@ import os
 import re
 import sys
 import textwrap
-from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -33,7 +32,7 @@ from util import BuildType
 class UserInput:
     build_types: tuple[BuildType, ...]
     chosen_cujgroups: tuple[int, ...]
-    description: Optional[str]
+    tag: Optional[str]
     log_dir: Path
     no_warmup: bool
     targets: tuple[str, ...]
@@ -91,8 +90,7 @@ def get_user_input() -> UserInput:
     p.add_argument(
         "-c",
         "--cujs",
-        nargs="+",
-        required=True,
+        nargs="*",
         type=validate_cujgroups,
         help="Index number(s) for the CUJ(s) from the following list. "
         "Or substring matches for the CUJ description."
@@ -100,11 +98,13 @@ def get_user_input() -> UserInput:
     )
     p.add_argument("--no-warmup", default=False, action="store_true")
     p.add_argument(
-        "-d",
-        "--description",
+        "-t",
+        "--tag",
         type=str,
         default="",
-        help="Any additional tag/description for the set of builds",
+        help="Any additional tag for this set of builds, this helps "
+        "distinguish the new data from previously collected data, "
+        "useful for comparative analysis",
     )
 
     log_levels = dict(getattr(logging, "_levelToName")).values()
@@ -122,16 +122,22 @@ def get_user_input() -> UserInput:
         type=Path,
         default=default_log_dir,
         help=textwrap.dedent(
-            f"""
-                 Directory for timing logs. Defaults to %(default)s
-                 TIPS:
+            """\
+                Directory for timing logs. Defaults to %(default)s
+                TIPS:
                   1 Specify a directory outside of the source tree
                   2 To view key metrics in metrics.csv:
-                    {util.get_cmd_to_display_tabulated_metrics(default_log_dir,
-                                                               False)}
+                {}
                   3 To view column headers:
-                    {util.get_csv_columns_cmd(default_log_dir)}"""
-        ).strip(),
+                {}
+            """
+        ).format(
+            textwrap.indent(
+                util.get_cmd_to_display_tabulated_metrics(default_log_dir, False),
+                " " * 4,
+            ),
+            textwrap.indent(util.get_csv_columns_cmd(default_log_dir), " " * 4),
+        ),
     )
     def_build_types = [
         BuildType.SOONG_ONLY,
@@ -178,8 +184,10 @@ def get_user_input() -> UserInput:
     if options.verbosity:
         logging.root.setLevel(options.verbosity)
 
-    chosen_cujgroups: tuple[int, ...] = tuple(
-        int(i) for sublist in options.cujs for i in sublist
+    chosen_cujgroups: tuple[int, ...] = (
+        tuple(int(i) for sublist in options.cujs for i in sublist)
+        if options.cujs
+        else tuple()
     )
 
     bazel_labels: list[str] = [
@@ -211,7 +219,7 @@ def get_user_input() -> UserInput:
 
     if not options.ignore_repo_diff and util.has_uncommitted_changes():
         error_message = (
-            "THERE ARE UNCOMMITTED CHANGES (TIP: repo status)."
+            "THERE ARE UNCOMMITTED CHANGES (TIP: repo status). "
             "Use --ignore-repo-diff to skip this check."
         )
         if not util.is_interactive_shell():
@@ -227,7 +235,7 @@ def get_user_input() -> UserInput:
         error_message = (
             f"{log_dir} already exists. "
             "Use --append-csv to skip this check."
-            "Consider --description to annotate your new runs"
+            "Consider --tag to your new runs"
         )
         if not util.is_interactive_shell():
             logging.critical(error_message)
@@ -266,7 +274,7 @@ def get_user_input() -> UserInput:
     return UserInput(
         build_types=build_types,
         chosen_cujgroups=chosen_cujgroups,
-        description=options.description,
+        tag=options.tag,
         log_dir=Path(options.log_dir).resolve(),
         no_warmup=options.no_warmup,
         targets=options.targets,
