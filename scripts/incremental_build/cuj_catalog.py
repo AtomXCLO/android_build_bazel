@@ -17,7 +17,6 @@ import io
 import logging
 import shutil
 import tempfile
-import textwrap
 import uuid
 from pathlib import Path
 from typing import Final, Optional
@@ -28,6 +27,8 @@ import cuj
 import finder
 import ui
 import util
+import random
+import re
 from cuj import CujGroup
 from cuj import CujStep
 from cuj import InWorkspace
@@ -70,6 +71,69 @@ def modify_revert(file: Path, text: Optional[str] = None) -> CujGroup:
     return CujGroup(
         de_src(file), [CujStep("modify", add_line), CujStep("revert", revert)]
     )
+
+
+def regex_modify_revert(file: Path, pattern: str, replacement: str, modify_type: str) -> CujGroup:
+    """
+    :param file: the file to be edited and reverted
+    :param pattern: the strings that will be replaced
+    :param replacement: the replaced strings
+    :param modify_type: types of modification
+    :return: A pair of CujSteps, where the fist modifies the file and the
+    second reverts it
+    """
+    if not file.exists():
+        raise RuntimeError(f"{file} does not exist")
+
+    original_text: str
+
+    def modify():
+        nonlocal original_text
+        original_text = file.read_text()
+        modified_text = re.sub(pattern, replacement, original_text, count=1, flags=re.MULTILINE)
+        file.write_text(modified_text)
+
+    def revert():
+        file.write_text(original_text)
+
+    return CujGroup(
+        de_src(file), [CujStep(modify_type, modify), CujStep("revert", revert)]
+    )
+
+
+def modify_private_method(file: Path) -> CujGroup:
+    pattern = r'(private static boolean.*{)'
+    replacement =  r'\1 Log.d("Placeholder", "Placeholder{}");'.format(random.randint(0,1000))
+    modify_type = "modify_private_method"
+    return regex_modify_revert(file, pattern, replacement, modify_type)
+
+
+def add_private_field(file: Path) -> CujGroup:
+    pattern = r'^\}$'
+    replacement =  r'private static final int FOO = ' + str(random.randint(0,1000)) + ';\n}'
+    modify_type = "add_private_field"
+    return regex_modify_revert(file, pattern, replacement, modify_type)
+
+
+def add_public_api(file: Path) -> CujGroup:
+    pattern = r'\}$'
+    replacement =  r'public static final int BAZ = ' + str(random.randint(0,1000)) + ';\n}'
+    modify_type = "add_public_api"
+    return regex_modify_revert(file, pattern, replacement, modify_type)
+
+
+def modify_resource(file: Path) -> CujGroup:
+    pattern = r'>0<'
+    replacement = r'>' + str(random.randint(0,1000)) + r'<'
+    modify_type = "modify_resource"
+    return regex_modify_revert(file, pattern, replacement, modify_type)
+
+
+def add_resource(file: Path) -> CujGroup:
+    pattern = r'</resources>'
+    replacement = r'    <integer name="foo">' + str(random.randint(0,1000)) + r'</integer>\n</resources>'
+    modify_type = "add_resource"
+    return regex_modify_revert(file, pattern, replacement, modify_type)
 
 
 def create_delete(file: Path, ws: InWorkspace, text: Optional[str] = None) -> CujGroup:
@@ -293,41 +357,35 @@ def create_delete_unkept_build_file(build_file) -> CujGroup:
     )
 
 
-NON_LEAF = "*/*"
-"""If `a/*/*` is a valid path `a` is not a leaf directory"""
-LEAF = "!*/*"
-"""If `a/*/*` is not a valid path `a` is a leaf directory, i.e. has no other
-non-empty sub-directories"""
-PKG = ["Android.bp", "!BUILD", "!BUILD.bazel"]
-"""limiting the candidate to Android.bp file with no sibling bazel files"""
-PKG_FREE = ["!**/Android.bp", "!**/BUILD", "!**/BUILD.bazel"]
-"""no Android.bp or BUILD or BUILD.bazel file anywhere"""
-
-
 def _kept_build_cujs() -> list[CujGroup]:
     # Bp2BuildKeepExistingBuildFile(build/bazel) is True(recursive)
     kept = src("build/bazel")
-    pkg = finder.any_dir_under(kept, *PKG)
-    examples = [pkg.joinpath("BUILD"), pkg.joinpath("BUILD.bazel")]
+    finder.confirm(
+        kept,
+        "compliance/Android.bp",
+        "!compliance/BUILD",
+        "!compliance/BUILD.bazel",
+        "rules/python/BUILD",
+    )
 
     return [
-        *[create_delete_kept_build_file(build_file) for build_file in examples],
-        create_delete(pkg.joinpath("BUILD/kept-dir"), InWorkspace.SYMLINK),
-        modify_revert_kept_build_file(finder.any_file_under(kept, "BUILD")),
+        *[
+            create_delete_kept_build_file(kept.joinpath("compliance").joinpath(b))
+            for b in ["BUILD", "BUILD.bazel"]
+        ],
+        create_delete(kept.joinpath("BUILD/kept-dir"), InWorkspace.SYMLINK),
+        modify_revert_kept_build_file(kept.joinpath("rules/python/BUILD")),
     ]
 
 
 def _unkept_build_cujs() -> list[CujGroup]:
     # Bp2BuildKeepExistingBuildFile(bionic) is False(recursive)
-    unkept = src("bionic")
-    pkg = finder.any_dir_under(unkept, *PKG)
+    unkept = src("bionic/libm")
+    finder.confirm(unkept, "Android.bp", "!BUILD", "!BUILD.bazel")
     return [
         *[
-            create_delete_unkept_build_file(build_file)
-            for build_file in [
-                pkg.joinpath("BUILD"),
-                pkg.joinpath("BUILD.bazel"),
-            ]
+            create_delete_unkept_build_file(unkept.joinpath(b))
+            for b in ["BUILD", "BUILD.bazel"]
         ],
         *[
             create_delete(build_file, InWorkspace.OMISSION)
@@ -336,7 +394,7 @@ def _unkept_build_cujs() -> list[CujGroup]:
                 unkept.joinpath("bogus-unkept/BUILD.bazel"),
             ]
         ],
-        create_delete(pkg.joinpath("BUILD/unkept-dir"), InWorkspace.SYMLINK),
+        create_delete(unkept.joinpath("BUILD/unkept-dir"), InWorkspace.SYMLINK),
     ]
 
 
@@ -345,23 +403,15 @@ def get_cujgroups() -> list[CujGroup]:
     # we are choosing "package" directories that have Android.bp but
     # not BUILD nor BUILD.bazel because
     # we can't tell if ShouldKeepExistingBuildFile would be True or not
-    pkg, p_why = finder.any_match(NON_LEAF, *PKG)
-    pkg_free, f_why = finder.any_match(NON_LEAF, *PKG_FREE)
-    leaf_pkg_free, _ = finder.any_match(LEAF, *PKG_FREE)
-    ancestor, a_why = finder.any_match(
-        "!Android.bp", "!BUILD", "!BUILD.bazel", "**/Android.bp"
-    )
-    logging.info(
-        textwrap.dedent(
-            f"""\
-                Choosing:
-                          package: {de_src(pkg)} has {p_why}
-                 package ancestor: {de_src(ancestor)} has {a_why} but no direct Android.bp
-                     package free: {de_src(pkg_free)} has {f_why} but no Android.bp anywhere
-                leaf package free: {de_src(leaf_pkg_free)} has neither Android.bp nor sub-dirs
-            """
-        )
-    )
+    non_empty_dir = "*/*"
+    pkg = src("art")
+    finder.confirm(pkg, non_empty_dir, "Android.bp", "!BUILD*")
+    pkg_free = src("bionic/docs")
+    finder.confirm(pkg_free, non_empty_dir, "!**/Android.bp", "!**/BUILD*")
+    ancestor = src("bionic")
+    finder.confirm(ancestor, "**/Android.bp", "!Android.bp", "!BUILD*")
+    leaf_pkg_free = src("bionic/build")
+    finder.confirm(leaf_pkg_free, f"!{non_empty_dir}", "!**/Android.bp", "!**/BUILD*")
 
     android_bp_cujs = [
         modify_revert(src("Android.bp")),
@@ -376,6 +426,14 @@ def get_cujgroups() -> list[CujGroup]:
         modify_revert(src("packages/modules/adb/daemon/main.cpp")),
         modify_revert(src("frameworks/base/core/java/android/view/View.java")),
         modify_revert(src("frameworks/base/core/java/android/provider/Settings.java")),
+        modify_private_method(src("frameworks/base/core/java/android/provider/Settings.java")),
+        add_private_field(src("frameworks/base/core/java/android/provider/Settings.java")),
+        add_public_api(src("frameworks/base/core/java/android/provider/Settings.java")),
+        modify_private_method(src("frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java")),
+        add_private_field(src("frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java")),
+        add_public_api(src("frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java")),
+        modify_resource(src("frameworks/base/core/res/res/values/config.xml")),
+        add_resource(src("frameworks/base/core/res/res/values/config.xml")),
     ]
     unreferenced_file_cujs = [
         *[
@@ -429,8 +487,8 @@ def get_cujgroups() -> list[CujGroup]:
         *[
             delete_restore(f, InWorkspace.SYMLINK)
             for f in [
-                finder.any_file("version_script.txt"),
-                finder.any_file("AndroidManifest.xml"),
+                src("bionic/libc/version_script.txt"),
+                src("external/cbor-java/AndroidManifest.xml"),
             ]
         ],
         *unreferenced_file_cujs,
