@@ -509,8 +509,6 @@ def tradefed_test_suite(
             ("suffix", suffix),
             # There shouldn't be package-external dependencies on the internal tests.
             ("visibility", ["//visibility:private"]),
-            # The internal tests shouldn't run with ... or :all target patterns
-            ("tags", ["manual"] + tags),
             # Tradefed harness always builds for host.
             ("target_compatible_with", ["//build/bazel/platforms/os:linux"]),
         ],
@@ -525,6 +523,8 @@ def tradefed_test_suite(
         tradefed_deviceless_test(
             name = tradefed_deviceless_test_name,
             template_test_config = None if test_config else template_test_config or deviceless_test_config,
+            # The internal tests shouldn't run with ... or :all target patterns
+            tags = tags + ["manual"],
             **common_tradefed_attrs
         )
 
@@ -548,12 +548,24 @@ def tradefed_test_suite(
             tradefed_device_driven_test(
                 name = tradefed_device_test_name,
                 template_test_config = None if test_config else template_test_config or device_driven_test_config,
+                # manual: The internal tests shouldn't run with ... or :all target patterns.
+                #
+                # exclusive: Device tests should run exclusively (one at a time), since they tend
+                # to acquire resources and can often result in oddities when running in parellel.
+                # Think Activity-based or port-based tests for example.
+                tags = tags + ["manual", "exclusive"],
                 **common_tradefed_attrs
             )
         else:
             tradefed_host_driven_device_test(
                 name = tradefed_device_test_name,
                 template_test_config = None if test_config else template_test_config or host_driven_device_test_config,
+                # manual: The internal tests shouldn't run with ... or :all target patterns.
+                #
+                # exclusive: Device tests should run exclusively (one at a time), since they tend
+                # to acquire resources and can often result in oddities when running in parellel.
+                # Think Activity-based or port-based tests for example.
+                tags = tags + ["manual", "exclusive"],
                 **common_tradefed_attrs
             )
 

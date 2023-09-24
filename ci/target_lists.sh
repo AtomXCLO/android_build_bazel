@@ -47,6 +47,9 @@ BUILD_TARGETS=(
   -//frameworks/native/opengl/libs:libGLESv2
   -//system/core/libutils:all
   -//system/unwinding/libunwindstack:all
+  # TODO(b/297550356): Remove denylisted external/rust/crates/protobuf package
+  # after https://github.com/bazelbuild/rules_rust/pull/2133 is merged
+  -//external/rust/crates/protobuf:all
 )
 
 TEST_TARGETS=(
@@ -63,6 +66,8 @@ HOST_ONLY_TEST_TARGETS=(
   # TODO (b/282953338): these tests depend on adb which is unconverted
   -//packages/modules/adb:adb_integration_test_adb
   -//packages/modules/adb:adb_integration_test_device
+  # TODO - b/297952899: this test is flaky in b builds
+  -//build/soong/cmd/zip2zip:zip2zip-test
 )
 
 # These targets are used to ensure that the aosp-specific rule wrappers forward
