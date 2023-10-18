@@ -60,6 +60,7 @@ build/soong/soong_ui.bash --make-mode atest --skip-soong-tests
 
 ${OUT_DIR}/host/linux-x86/bin/atest-dev \
   --roboleaf-mode=dev \
+  --bazel-arg=--config=ci \
   --bazel-arg=--config=deviceless_tests \
   --bazel-arg=--remote_instance_name="${RBE_instance}" \
   --bazel-arg=--bes_keywords="${ROBOLEAF_BES_KEYWORDS}" \
@@ -68,6 +69,7 @@ ${OUT_DIR}/host/linux-x86/bin/atest-dev \
   --bazel-arg=--project_id="${BES_PROJECT_ID}" \
   --bazel-arg=--build_metadata=ab_branch="${BRANCH_NAME}" \
   --bazel-arg=--build_metadata=ab_target="${BUILD_TARGET_NAME}" \
+  --bazel-arg=--build_metadata=ab_build_id="${BUILD_NUMBER}" \
   "$@" \
   HelloWorldHostTest \
   sysprop_test \

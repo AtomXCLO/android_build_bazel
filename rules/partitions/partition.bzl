@@ -49,6 +49,19 @@ def _partition_impl(ctx):
     toolchain = ctx.toolchains[":partition_toolchain_type"].toolchain_info
     python_interpreter = _get_python3(ctx)
 
+    du = ctx.actions.declare_file("du")
+    ctx.actions.symlink(
+        output = du,
+        target_file = toolchain.toybox[DefaultInfo].files_to_run.executable,
+        is_executable = True,
+    )
+    find = ctx.actions.declare_file("find")
+    ctx.actions.symlink(
+        output = find,
+        target_file = toolchain.toybox[DefaultInfo].files_to_run.executable,
+        is_executable = True,
+    )
+
     # build_image requires that the output file be named specifically <type>.img, so
     # put all the outputs under a name-qualified folder.
     output_image = ctx.actions.declare_file(ctx.attr.name + "/" + ctx.attr.type + ".img")
@@ -76,10 +89,11 @@ def _partition_impl(ctx):
             extra_inputs.append(ctx.file.base_staging_dir_file_list)
 
     image_info = ctx.actions.declare_file(ctx.attr.name + "/image_info.txt")
-    image_info_contents = ctx.attr.image_properties
+    image_info_contents = ctx.attr.image_properties + "\n"
+    image_info_contents += "ext_mkuserimg=mkuserimg_mke2fs\n"
     if ctx.attr.root_dir:
         extra_inputs.append(ctx.file.root_dir)
-        image_info_contents += "\nroot_dir=" + ctx.file.root_dir.path + "\n"
+        image_info_contents += "root_dir=" + ctx.file.root_dir.path + "\n"
     ctx.actions.write(image_info, image_info_contents)
 
     staging_dir_builder_options_file = ctx.actions.declare_file(ctx.attr.name + "/staging_dir_builder_options.json")
@@ -93,6 +107,7 @@ def _partition_impl(ctx):
         toolchain.e2fsdroid[DefaultInfo].files_to_run,
         toolchain.mke2fs[DefaultInfo].files_to_run,
         toolchain.mkuserimg_mke2fs[DefaultInfo].files_to_run,
+        toolchain.simg2img[DefaultInfo].files_to_run,
         toolchain.tune2fs[DefaultInfo].files_to_run,
     ]
 
@@ -103,7 +118,10 @@ def _partition_impl(ctx):
         ] + files.values() + extra_inputs,
         tools = extra_tools + [
             build_image_files,
+            du,
+            find,
             python_interpreter,
+            toolchain.toybox[DefaultInfo].files_to_run,
         ],
         outputs = [output_image],
         executable = ctx.executable._staging_dir_builder,
@@ -120,10 +138,8 @@ def _partition_impl(ctx):
             # The dict + .keys() is to dedup the path elements, as some tools are in the same folder
             "PATH": ":".join({t.executable.dirname: True for t in extra_tools}.keys() + [
                 python_interpreter.dirname,
-                # TODO: the /usr/bin addition is because build_image uses the du command
-                # in GetDiskUsage(). This can probably be rewritten to just use python code
-                # instead.
-                "/usr/bin",
+                du.dirname,
+                find.dirname,
             ]),
         },
     )
