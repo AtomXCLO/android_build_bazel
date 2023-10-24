@@ -124,18 +124,18 @@ def cc_library_shared(
         # This workaround is error-prone because it assumes all the fdo_profile
         # targets are created in a specific way (e.g. fdo_profile target named foo
         # uses an afdo profile file named foo.afdo in the same folder).
-        fdo_profile_path = fdo_profile + ".afdo"
+        fdo_profile_file = fdo_profile + "_file"
         linkopts = linkopts + [
             "-funique-internal-linkage-names",
             "-fprofile-sample-accurate",
             # profile-sample-use is needed to ensure symbol ordering
-            "-fprofile-sample-use=$(location {})".format(fdo_profile_path),
+            "-fprofile-sample-use=$(location {})".format(fdo_profile_file),
             "-Wl,-mllvm,-no-warn-sample-unused=true",
         ]
         if additional_linker_inputs != None:
-            additional_linker_inputs = additional_linker_inputs + [fdo_profile_path]
+            additional_linker_inputs = additional_linker_inputs + [fdo_profile_file]
         else:
-            additional_linker_inputs = [fdo_profile_path]
+            additional_linker_inputs = [fdo_profile_file]
 
     stl_info = stl_info_from_attr(stl, True)
     linkopts = linkopts + stl_info.linkopts
@@ -519,10 +519,7 @@ _cc_library_shared_proxy = rule(
 )
 
 def _bssl_hash_injection_impl(ctx):
-    if len(ctx.files.src) != 1:
-        fail("Expected only one shared library file")
-
-    hashed_file = ctx.files.src[0]
+    hashed_file = ctx.file.src
     if ctx.attr.inject_bssl_hash:
         hashed_file = ctx.actions.declare_file("lib" + ctx.attr.name + ".so")
         args = ctx.actions.args()
@@ -549,8 +546,7 @@ _bssl_hash_injection = rule(
     attrs = {
         "src": attr.label(
             mandatory = True,
-            # TODO(b/217908237): reenable allow_single_file
-            # allow_single_file = True,
+            allow_single_file = True,
             providers = [CcSharedLibraryInfo],
         ),
         "inject_bssl_hash": attr.bool(

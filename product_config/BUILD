@@ -1,4 +1,5 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag", "string_list_flag")
+load("//build/bazel/rules/aconfig:aconfig_value_set.bzl", "aconfig_value_set")
 load(":product_variables_for_attributes.bzl", "product_variables_for_attributes")
 
 package(default_visibility = ["//visibility:public"])
@@ -8,17 +9,46 @@ package(default_visibility = ["//visibility:public"])
 # Soong had this feature, so it was ported to bazel.
 product_variables_for_attributes(name = "product_variables_for_attributes")
 
+# This label flag will always point to the device platform for the current android product.
+# It can be used to transition into the device configuration from the host configuration.
+label_flag(
+    name = "device_platform",
+    build_setting_default = "//build/bazel/utils:fail",
+)
+
+string_flag(
+    name = "target_build_variant",
+    build_setting_default = "eng",
+    values = [
+        "user",
+        "userdebug",
+        "eng",
+    ],
+)
+
 _string_list_variables = [
+    # keep-sorted start
+    "aapt_config",
     "build_version_tags",
     "cfi_exclude_paths",
     "cfi_include_paths",
     "device_abi",
     "manifest_package_name_overrides",
+    "memtag_heap_async_include_paths",
+    "memtag_heap_exclude_paths",
+    "memtag_heap_sync_include_paths",
     "tidy_checks",
     "unbundled_build_apps",
+    # keep-sorted end
 ]
 
 _string_variables = [
+    # keep-sorted start
+    # TODO: b/301593550 - commas can't be escaped in a string-list passed in a platform mapping,
+    # so commas are switched for ":" in soong injection, and must be back-substituted
+    # into commas wherever the AAPTCharacteristics product config variable is used.
+    "aapt_characteristics",
+    "aapt_preferred_config",
     "apex_global_min_sdk_version_override",
     "build_id",
     "default_app_certificate",
@@ -29,32 +59,38 @@ _string_variables = [
     "platform_sdk_extension_version",
     "platform_sdk_version",
     "platform_sdk_version_or_codename",
+    "platform_security_patch",
+    "platform_version_last_stable",
     "platform_version_name",
     "product_brand",
     "product_manufacturer",
-    "target_build_variant",
+    "release_aconfig_flag_default_permission",
+    "release_version",
+    # keep-sorted end
 ]
 
 _bool_variables = [
+    # keep-sorted start
     "always_use_prebuilt_sdks",
     "arc",
     "binder32bit",
+    "build_broken_incorrect_partition_images",
     "build_from_text_stub",
     "compressed_apex",
-    "debuggable",
     "device_page_size_agnostic",
     "enforce_vintf_manifest",
-    "eng",
     "malloc_not_svelte",
     "malloc_pattern_fill_contents",
     "malloc_zero_contents",
     "native_coverage",
     "pdk",
+    "platform_sdk_final",
     "release_aidl_use_unfrozen",
     "safestack",
     "treble_linker_namespaces",
     "uml",
     "unbundled_build",
+    # keep-sorted end
 ]
 
 [
@@ -89,4 +125,15 @@ bool_flag(
 label_flag(
     name = "default_app_certificate_filegroup",
     build_setting_default = "//build/bazel/utils:empty_filegroup",
+)
+
+label_flag(
+    name = "release_aconfig_value_sets",
+    build_setting_default = ":default_aconfig_value_set",
+)
+
+aconfig_value_set(
+    name = "default_aconfig_value_set",
+    values = [],
+    visibility = ["//visibility:private"],
 )

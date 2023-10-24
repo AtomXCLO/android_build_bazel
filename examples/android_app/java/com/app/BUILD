@@ -79,6 +79,7 @@ android_library(
 cc_library_shared(
     name = "jni",
     srcs = ["jni.cc"],
+    stl = "libc++",
     deps = [":jni_dep"],
 )
 
@@ -86,6 +87,7 @@ cc_library_static(
     name = "jni_dep",
     srcs = ["jni_dep.cc"],
     hdrs = ["jni_dep.h"],
+    stl = "libc++",
     deps = ["//libnativehelper:jni_headers"],
 )
 
@@ -94,4 +96,24 @@ aar_import(
     aar = "example_lib.aar",
     sdk_version = "32",
     target_compatible_with = ["//build/bazel/platforms/os:android"],
+)
+
+# This is a minimal app that builds against the NDK
+android_binary(
+    name = "app_with_sdk_variant_of_jni_deps",
+    manifest = "AndroidManifest.xml",
+    sdk_version = "current",
+    target_compatible_with = ["//build/bazel/platforms/os:android"],
+    deps = [
+        "//external/dexmaker:libdexmakerjvmtiagent",
+        "//external/dexmaker:libstaticjvmtiagent",
+    ],
+)
+
+# A test to verify that ndk libs are not included in an android_app
+sh_test(
+    name = "no_ndk_libs_in_android_app",
+    srcs = ["no_ndk_libs_in_android_app.sh"],
+    # SimpleJNI has jni libs that builds against the NDK by setting sdk_version: "current"
+    data = ["//development/samples/SimpleJNI"],
 )

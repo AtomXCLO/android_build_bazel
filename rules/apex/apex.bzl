@@ -16,12 +16,14 @@ load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@soong_injection//apex_toolchain:constants.bzl", "default_manifest_version")
 load("//build/bazel/platforms:platform_utils.bzl", "platforms")
+load("//build/bazel/rules:build_fingerprint.bzl", "BuildFingerprintInfo")
 load("//build/bazel/rules:common.bzl", "get_dep_targets")
 load("//build/bazel/rules:metadata.bzl", "MetadataFileInfo")
 load("//build/bazel/rules:prebuilt_file.bzl", "PrebuiltFileInfo")
 load("//build/bazel/rules:sh_binary.bzl", "ShBinaryInfo")
 load("//build/bazel/rules:toolchain_utils.bzl", "verify_toolchain_exists")
 load("//build/bazel/rules/android:android_app_certificate.bzl", "AndroidAppCertificateInfo", "NoAndroidAppCertificateInfo", "android_app_certificate_with_default_cert")
+load("//build/bazel/rules/android:manifest_fixer.bzl", "manifest_fixer")
 load("//build/bazel/rules/apex:cc.bzl", "ApexCcInfo", "ApexCcMkInfo", "apex_cc_aspect")
 load("//build/bazel/rules/apex:sdk_versions.bzl", "maybe_override_min_sdk_version")
 load("//build/bazel/rules/apex:transition.bzl", "apex_transition", "shared_lib_transition_32", "shared_lib_transition_64")
@@ -339,29 +341,19 @@ def _generate_file_contexts(ctx):
 
     return file_contexts
 
-# TODO(b/255592586): This can be reused by Java rules later.
 def _mark_manifest_as_test_only(ctx, apex_toolchain):
-    if ctx.file.android_manifest == None:
-        return None
-
     android_manifest = ctx.file.android_manifest
     dir_name = android_manifest.dirname
     base_name = android_manifest.basename
     android_manifest_fixed = ctx.actions.declare_file(paths.join(dir_name, "manifest_fixer", base_name))
-
-    args = ctx.actions.args()
-    args.add("--test-only")
-    args.add(android_manifest)
-    args.add(android_manifest_fixed)
-
-    ctx.actions.run(
-        inputs = [android_manifest],
-        outputs = [android_manifest_fixed],
-        executable = apex_toolchain.manifest_fixer[DefaultInfo].files_to_run,
-        arguments = [args],
+    manifest_fixer.fix(
+        ctx,
+        manifest_fixer = apex_toolchain.manifest_fixer[DefaultInfo].files_to_run,
+        in_manifest = android_manifest,
+        out_manifest = android_manifest_fixed,
         mnemonic = "MarkAndroidManifestTestOnly",
+        test_only = True,
     )
-
     return android_manifest_fixed
 
 # Generate <APEX>_backing.txt file which lists all libraries used by the APEX.
@@ -437,16 +429,9 @@ def _run_apexer(ctx, apex_toolchain):
     notices_file = _generate_notices(ctx, apex_toolchain)
     api_fingerprint_file = None
 
-    # NOTE: When used as inputs to another sandboxed action, this directory
-    # artifact's inner files will be made up of symlinks. Ensure that the
-    # aforementioned action handles symlinks correctly (e.g. following
-    # symlinks).
-    staging_dir = ctx.actions.declare_directory(ctx.attr.name + "_staging_dir")
-
-    file_mapping_file = ctx.actions.declare_file(ctx.attr.name + "_apex_file_mapping.json")
-    ctx.actions.write(file_mapping_file, json.encode({
+    staging_dir_builder_options_file = ctx.actions.declare_file(ctx.attr.name + "_staging_dir_builder_options.json")
+    ctx.actions.write(staging_dir_builder_options_file, json.encode({
         "file_mapping": {k: v.path for k, v in file_mapping.items()},
-        "staging_dir_path": staging_dir.path,
     }))
 
     # Outputs
@@ -455,12 +440,10 @@ def _run_apexer(ctx, apex_toolchain):
     apexer_files = apex_toolchain.apexer[DefaultInfo].files_to_run
 
     # Arguments
-    command = [ctx.executable._staging_dir_builder.path, file_mapping_file.path]
+    command = [ctx.executable._staging_dir_builder.path, staging_dir_builder_options_file.path]
 
     # start of apexer cmd
     command.append(apexer_files.executable.path)
-    if ctx.attr._apexer_verbose[BuildSettingInfo].value:
-        command.append("--verbose")
 
     command.append("--force")
     command.append("--include_build_info")
@@ -537,12 +520,12 @@ def _run_apexer(ctx, apex_toolchain):
     elif ctx.attr.testonly:
         command.append("--test_only")
 
-    command.append(staging_dir.path)
+    command.append("STAGING_DIR_PLACEHOLDER")
     command.append(apex_output_file.path)
 
     inputs = [
         ctx.executable._staging_dir_builder,
-        file_mapping_file,
+        staging_dir_builder_options_file,
         canned_fs_config,
         apex_manifest_pb,
         file_contexts,
@@ -557,17 +540,6 @@ def _run_apexer(ctx, apex_toolchain):
     if android_manifest != None:
         inputs.append(android_manifest)
 
-    tools = [
-        apexer_files,
-        avbtool_files,
-        e2fsdroid_files,
-        mke2fs_files,
-        resize2fs_files,
-        sefcontext_compile_files,
-        apex_toolchain.aapt2,
-        staging_dir_builder_files,
-    ]
-
     # This is run_shell instead of run because --target_sdk_version may
     # use the API fingerprinting file contents using bash expansion,
     # and only run_shell can support that by executing the whole command with
@@ -576,8 +548,17 @@ def _run_apexer(ctx, apex_toolchain):
     # bash expansion.
     ctx.actions.run_shell(
         inputs = inputs,
-        tools = tools,
-        outputs = [apex_output_file, staging_dir],
+        tools = [
+            apexer_files,
+            avbtool_files,
+            e2fsdroid_files,
+            mke2fs_files,
+            resize2fs_files,
+            sefcontext_compile_files,
+            apex_toolchain.aapt2,
+            staging_dir_builder_files,
+        ],
+        outputs = [apex_output_file],
         command = " ".join(command),
         mnemonic = "Apexer",
     )
@@ -586,7 +567,7 @@ def _run_apexer(ctx, apex_toolchain):
         requires_native_libs = requires_native_libs,
         provides_native_libs = provides_native_libs,
         backing_libs = _generate_apex_backing_file(ctx, backing_libs),
-        symbols_used_by_apex = _generate_symbols_used_by_apex(ctx, apex_toolchain, staging_dir),
+        symbols_used_by_apex = _generate_symbols_used_by_apex(ctx, apex_toolchain, file_mapping),
         java_symbols_used_by_apex = _generate_java_symbols_used_by_apex(ctx, apex_toolchain),
         installed_files = _generate_installed_files_list(ctx, file_mapping),
         make_modules_to_install = make_modules_to_install,
@@ -682,18 +663,24 @@ def _run_apex_compression_tool(ctx, apex_toolchain, input_file, output_file_name
 # Generate <module>_using.txt, which contains a list of versioned NDK symbols
 # dynamically linked to by this APEX's contents. This is used for coverage
 # checks.
-def _generate_symbols_used_by_apex(ctx, apex_toolchain, staging_dir):
+def _generate_symbols_used_by_apex(ctx, apex_toolchain, file_mapping):
+    staging_dir_builder_options_file = ctx.actions.declare_file(ctx.attr.name + "_generate_symbols_used_by_apex_staging_dir_builder_options.json")
+    ctx.actions.write(staging_dir_builder_options_file, json.encode({
+        "file_mapping": {k: v.path for k, v in file_mapping.items()},
+    }))
     symbols_used_by_apex = ctx.actions.declare_file(ctx.attr.name + "_using.txt")
     ctx.actions.run(
         outputs = [symbols_used_by_apex],
-        inputs = [staging_dir],
+        inputs = [staging_dir_builder_options_file] + file_mapping.values(),
         tools = [
             apex_toolchain.readelf.files_to_run,
             apex_toolchain.gen_ndk_usedby_apex.files_to_run,
         ],
-        executable = apex_toolchain.gen_ndk_usedby_apex.files_to_run,
+        executable = ctx.executable._staging_dir_builder,
         arguments = [
-            staging_dir.path,
+            staging_dir_builder_options_file.path,
+            apex_toolchain.gen_ndk_usedby_apex.files_to_run.executable.path,
+            "STAGING_DIR_PLACEHOLDER",
             apex_toolchain.readelf.files_to_run.executable.path,
             symbols_used_by_apex.path,
         ],
@@ -825,17 +812,7 @@ def _generate_sbom(ctx, file_mapping, metadata_file_mapping, apex_file):
     inputs += file_mapping.values()
     inputs += metadata_files
 
-    build_version_tags = ctx.attr._build_version_tags[BuildSettingInfo].value
-    build_fingerprint = "%s/%s/%s:%s/%s/%s:%s/%s" % (
-        ctx.attr._product_brand[BuildSettingInfo].value,
-        ctx.attr._device_product[BuildSettingInfo].value,
-        ctx.attr._device_name[BuildSettingInfo].value,
-        ctx.attr._platform_version_name[BuildSettingInfo].value,
-        ctx.attr._build_id[BuildSettingInfo].value,
-        "",
-        ctx.attr._target_build_variant[BuildSettingInfo].value,
-        "_".join(build_version_tags),
-    )
+    build_fingerprint = ctx.attr._build_fingerprint[BuildFingerprintInfo].fingerprint_blank_build_number
     ctx.actions.run(
         inputs = inputs,
         outputs = [sbom_file, sbom_fragment_file],
@@ -1072,7 +1049,10 @@ APEX is truly updatable. To be updatable, min_sdk_version should be set as well.
             executable = True,
         ),
         "_platform_utils": attr.label(
-            default = Label("//build/bazel/platforms:platform_utils"),
+            default = "//build/bazel/platforms:platform_utils",
+        ),
+        "_build_fingerprint": attr.label(
+            default = "//build/bazel/rules:build_fingerprint",
         ),
         "_generate_sbom": attr.label(
             cfg = "exec",
@@ -1098,24 +1078,8 @@ APEX is truly updatable. To be updatable, min_sdk_version should be set as well.
             default = "//build/bazel/product_config:apex_global_min_sdk_version_override",
             doc = "If specified, override the min_sdk_version of this apex and in the transition and checks for dependencies.",
         ),
-        "_apexer_verbose": attr.label(
-            default = "//build/bazel/rules/apex:apexer_verbose",
-            doc = "If enabled, make apexer log verbosely.",
-        ),
-        "_build_id": attr.label(
-            default = "//build/bazel/product_config:build_id",
-        ),
-        "_build_version_tags": attr.label(
-            default = "//build/bazel/product_config:build_version_tags",
-        ),
         "_compressed_apex": attr.label(
             default = "//build/bazel/product_config:compressed_apex",
-        ),
-        "_device_product": attr.label(
-            default = "//build/bazel/product_config:device_product",
-        ),
-        "_device_name": attr.label(
-            default = "//build/bazel/product_config:device_name",
         ),
         "_manifest_package_name_overrides": attr.label(
             default = "//build/bazel/product_config:manifest_package_name_overrides",
@@ -1124,17 +1088,8 @@ APEX is truly updatable. To be updatable, min_sdk_version should be set as well.
             default = "//build/bazel/rules/apex:override_apex_manifest_default_version",
             doc = "If specified, override 'version: 0' in apex_manifest.json with this value instead of the branch default. Non-zero versions will not be changed.",
         ),
-        "_platform_version_name": attr.label(
-            default = "//build/bazel/product_config:platform_version_name",
-        ),
-        "_product_brand": attr.label(
-            default = "//build/bazel/product_config:product_brand",
-        ),
         "_product_manufacturer": attr.label(
             default = "//build/bazel/product_config:product_manufacturer",
-        ),
-        "_target_build_variant": attr.label(
-            default = "//build/bazel/product_config:target_build_variant",
         ),
         "_unbundled_build_apps": attr.label(
             default = "//build/bazel/product_config:unbundled_build_apps",

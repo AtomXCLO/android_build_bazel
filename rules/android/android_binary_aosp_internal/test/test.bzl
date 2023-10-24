@@ -82,6 +82,7 @@ def _test_contains_expected_providers_and_files(name):
         target_compatible_with = [],
         features = [],
         tags = ["manual"],
+        api_surface = "module-libapi",
     )
     fake_cc_library_shared = name + "_fake_cc_library_shared"
     cc_library_shared(
@@ -101,6 +102,7 @@ def _test_contains_expected_providers_and_files(name):
         ],
         srcs = ["fake.java"],
         tags = ["manual"],
+        sdk_version = "current",
     )
 
     android_binary_aosp_internal_providers_test(

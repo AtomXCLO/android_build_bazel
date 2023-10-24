@@ -215,6 +215,11 @@ go_rules_dependencies()
 go_register_toolchains(experiments = [])
 
 local_repository(
+    name = "rules_proto",
+    path = "build/bazel/rules/proto",
+)
+
+local_repository(
     name = "rules_rust",
     path = "external/bazelbuild-rules_rust",
 )
@@ -225,6 +230,12 @@ new_local_repository(
     path = "external/rust/crates/tinyjson",
 )
 
+local_repository(
+    name = "rules_testing",
+    path = "external/bazelbuild-rules_testing",
+)
+
 register_toolchains(
     "build/bazel/toolchains/rust:toolchain_x86_64_unknown-linux-gnu",
+    "build/bazel/toolchains/rust:proto-toolchain",
 )
