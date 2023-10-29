@@ -27,6 +27,7 @@ load(":cc_prebuilt_binary_test.bzl", "cc_prebuilt_binary_test_suite")
 load(":cc_prebuilt_library_shared_test.bzl", "cc_prebuilt_library_shared_test_suite")
 load(":cc_prebuilt_library_static_test.bzl", "cc_prebuilt_library_static_test_suite")
 load(":cc_proto_test.bzl", "cc_proto_test_suite")
+load(":cc_stub_library_test.bzl", "cc_stub_library_test_suite")
 load(":cc_sysprop_library_test.bzl", "cc_gen_sysprop_test_suite")
 load(":cc_test_test.bzl", "cc_test_test_suite")
 load(":cc_xsd_config_library_test.bzl", "cc_xsd_config_library_test_suite")
@@ -81,7 +82,7 @@ selects.config_setting_group(
     match_all = [
         ":coverage_cfi_enabled",
         ":coverage_lib_flag",
-        "//build/bazel/platforms/os:android_config_setting",
+        "//build/bazel_common_rules/platforms/os:android_config_setting",
     ],
 )
 
@@ -90,18 +91,18 @@ selects.config_setting_group(
     match_all = [
         ":coverage_cfi_disabled",
         ":coverage_lib_flag",
-        "//build/bazel/platforms/os:android_config_setting",
+        "//build/bazel_common_rules/platforms/os:android_config_setting",
     ],
 )
 
 platform(
     name = "windows_for_testing",
-    constraint_values = ["@//build/bazel/platforms/os:windows"],
+    constraint_values = ["@//build/bazel_common_rules/platforms/os:windows"],
 )
 
 platform(
     name = "darwin_for_testing",
-    constraint_values = ["@//build/bazel/platforms/os:darwin"],
+    constraint_values = ["@//build/bazel_common_rules/platforms/os:darwin"],
 )
 
 cc_aconfig_library_test_suite(name = "cc_aconfig_library_tests")
@@ -131,6 +132,8 @@ cc_prebuilt_library_shared_test_suite(name = "cc_prebuilt_library_shared_tests")
 cc_prebuilt_library_static_test_suite(name = "cc_prebuilt_library_static_tests")
 
 cc_proto_test_suite(name = "cc_proto_tests")
+
+cc_stub_library_test_suite(name = "cc_stub_library_tests")
 
 cc_xsd_config_library_test_suite(name = "cc_xsd_config_library_tests")
 

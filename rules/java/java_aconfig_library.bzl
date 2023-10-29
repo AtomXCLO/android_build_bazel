@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Macro wrapping the java_aconfig_library for bp2build. """
+
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("//build/bazel/rules/aconfig:aconfig_declarations.bzl", "AconfigDeclarationsInfo")
 load("//build/bazel/rules/java:sdk_transition.bzl", "sdk_transition")
@@ -71,7 +73,7 @@ def _java_aconfig_library_impl(ctx):
     java_info = java_common.compile(
         ctx,
         source_jars = [gen_srcjar],
-        deps = [ctx.attr._aconfig_annotations_lib[JavaInfo]],
+        deps = [d[JavaInfo] for d in ctx.attr.libs],
         output = out_file,
         java_toolchain = ctx.toolchains["@bazel_tools//tools/jdk:toolchain_type"].java,
     )
@@ -99,6 +101,9 @@ _java_aconfig_library = rule(
             providers = [AconfigDeclarationsInfo],
             mandatory = True,
         ),
+        "libs": attr.label_list(
+            providers = [JavaInfo],
+        ),
         "test": attr.bool(default = False),
         "java_version": attr.string(),
         "sdk_version": attr.string(),
@@ -113,10 +118,6 @@ _java_aconfig_library = rule(
             cfg = "exec",
             allow_single_file = True,
             default = Label("//build/soong/zip/cmd:soong_zip"),
-        ),
-        "_aconfig_annotations_lib": attr.label(
-            providers = [JavaInfo],
-            default = Label("//frameworks/libs/modules-utils/java:aconfig-annotations-lib"),
         ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
@@ -134,11 +135,17 @@ def java_aconfig_library(
         sdk_version = "system_current",
         java_version = None,
         visibility = None,
+        libs = [],
         tags = [],
         target_compatible_with = []):
+    combined_libs = [
+        "//frameworks/libs/modules-utils/java:aconfig-annotations-lib",
+        "//tools/platform-compat/java/android/compat/annotation:unsupportedappusage",
+    ] + libs
     _java_aconfig_library(
         name = name,
         aconfig_declarations = aconfig_declarations,
+        libs = combined_libs,
         test = test,
         sdk_version = sdk_version,
         java_version = java_version,

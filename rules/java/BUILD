@@ -22,6 +22,8 @@ load(":bootclasspath.bzl", "bootclasspath")
 load(":bootclasspath_test.bzl", "bootclasspath_test_suite")
 load(":host_for_device_test.bzl", "host_for_device_test_suite")
 load(":java_aconfig_library_test.bzl", "java_aconfig_library_rt_test_suite", "java_aconfig_library_test_suite")
+load(":java_resources_test.bzl", "java_resources_test_suite")
+load(":java_sysprop_library_test.bzl", "java_sysprop_library_test_suite")
 load(":java_system_modules_test.bzl", "java_system_modules_test_suite")
 load(":java_xsd_config_library_test.bzl", "java_xsd_config_library_test_suite")
 load(":library_test.bzl", "java_library_test_suite")
@@ -46,6 +48,8 @@ java_library_test_suite(name = "java_library_tests")
 
 bootclasspath_test_suite(name = "bootclasspath_tests")
 
+java_resources_test_suite(name = "java_resources_test_suite")
+
 versions_test_suite(name = "versions_tests")
 
 sdk_transition_test_suite(name = "sdk_transition_tests")
@@ -59,6 +63,8 @@ platform_compat_config_test_suite(name = "platform_compat_config_tests")
 java_aconfig_library_test_suite(name = "java_aconfig_library_test")
 
 java_aconfig_library_rt_test_suite(name = "java_aconfig_library_rt_test")
+
+java_sysprop_library_test_suite(name = "java_sysprop_library_tests")
 
 string_setting(
     name = "version",
@@ -146,8 +152,8 @@ default_java_toolchain(
 
 toolchain(
     name = "jdk17_host_toolchain_java_definition",
-    exec_compatible_with = ["//build/bazel/platforms/os:linux"],
-    target_compatible_with = ["//build/bazel/platforms/os:linux"],
+    exec_compatible_with = ["//build/bazel_common_rules/platforms/os:linux"],
+    target_compatible_with = ["//build/bazel_common_rules/platforms/os:linux"],
     target_settings = [],
     toolchain = ":jdk17_host_toolchain_java",
     toolchain_type = "@bazel_tools//tools/jdk:toolchain_type",

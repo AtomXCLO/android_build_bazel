@@ -53,10 +53,13 @@ export \
   OUT=${out} \
   ANDROID_HOST_OUT=$(get_build_var HOST_OUT) \
   ANDROID_TARGET_OUT_TESTCASES=$(get_build_var TARGET_OUT_TESTCASES) \
+  REMOTE_AVD=true \
 
 build/soong/soong_ui.bash --make-mode bp2build --skip-soong-tests
 
 build/soong/soong_ui.bash --make-mode atest --skip-soong-tests
+
+launched_targets+=("$(cat tools/asuite/atest/test_runners/roboleaf_launched.txt | grep -v "^#" | cut -d ':' -f2 | tr '\n' ' ')")
 
 ${OUT_DIR}/host/linux-x86/bin/atest-dev \
   --roboleaf-mode=dev \
@@ -70,9 +73,4 @@ ${OUT_DIR}/host/linux-x86/bin/atest-dev \
   --bazel-arg=--build_metadata=ab_target="${BUILD_TARGET_NAME}" \
   --bazel-arg=--build_metadata=ab_build_id="${BUILD_NUMBER}" \
   "$@" \
-  HelloWorldHostTest \
-  sysprop_test \
-  merge_annotation_zips_test \
-  adbd_test \
-  HelloWorldTests \
-  CtsGestureTestCases
+  ${launched_targets[@]}
