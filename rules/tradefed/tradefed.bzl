@@ -35,6 +35,8 @@ SKIPPED automatically.
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("@env//:env.bzl", "env")
+load("//build/bazel/flags:common.bzl", "is_env_true")
 load("//build/bazel/platforms:platform_utils.bzl", "platforms")
 load("//build/bazel_common_rules/rules/remote_device/device:device_environment.bzl", "DeviceEnvironment")
 load(":cc_aspects.bzl", "CcTestSharedLibsInfo", "collect_cc_libs_aspect")
@@ -48,6 +50,7 @@ FILTER_GENERATOR_SUFFIX = "__filter_generator"
 LANGUAGE_CC = "cc"
 LANGUAGE_JAVA = "java"
 LANGUAGE_ANDROID = "android"
+LANGUAGE_SHELL = "shell"
 
 # A transition to force the target device platforms configuration. This is
 # used in the tradefed -> cc_test edge (for example).
@@ -123,6 +126,10 @@ _TRADEFED_TEST_ATTRIBUTES = {
         doc = "Files needed on the classpath to run tradefed",
         cfg = "exec",
     ),
+    "data_bins": attr.label_list(
+        doc = "Executables that need to be installed alongside the test entry point.",
+        cfg = "exec",
+    ),
     "_platform_utils": attr.label(
         default = Label("//build/bazel/platforms:platform_utils"),
     ),
@@ -151,7 +158,7 @@ _TRADEFED_TEST_ATTRIBUTES = {
     ),
     "test_language": attr.string(
         default = "",
-        values = ["", LANGUAGE_CC, LANGUAGE_JAVA, LANGUAGE_ANDROID],
+        values = ["", LANGUAGE_CC, LANGUAGE_JAVA, LANGUAGE_ANDROID, LANGUAGE_SHELL],
         doc = "the programming language the test uses",
     ),
     "suffix": attr.string(
@@ -258,14 +265,17 @@ def _get_or_generate_test_config(ctx, module_name, tf_test_dir, test_entry_point
         return test_config, dynamic_config
 
     # Non-android tests.
+    expand_template_substitutions = {
+        "{MODULE}": module_name,
+        "{EXTRA_CONFIGS}": "\n    ".join(ctx.attr.template_configs),
+        "{TEST_INSTALL_BASE}": ctx.attr.template_install_base,
+    }
+    if test_language == LANGUAGE_SHELL:
+        expand_template_substitutions["{OUTPUT_FILENAME}"] = module_name + ".sh"
     ctx.actions.expand_template(
         template = ctx.file.template_test_config,
         output = test_config,
-        substitutions = {
-            "{MODULE}": module_name,
-            "{EXTRA_CONFIGS}": "\n    ".join(ctx.attr.template_configs),
-            "{TEST_INSTALL_BASE}": ctx.attr.template_install_base,
-        },
+        substitutions = expand_template_substitutions,
     )
     return test_config, dynamic_config
 
@@ -311,7 +321,7 @@ def _tradefed_test_impl(ctx, tradefed_options = []):
     if test_language == LANGUAGE_ANDROID:
         test_entry_point = test_target[ApkInfo].signed_apk
     else:
-        # cc, java, py
+        # cc, java, py, sh
         test_entry_point = test_target.files_to_run.executable
 
     # For Java, a library may make more sense here than the executable. When
@@ -416,6 +426,14 @@ def _tradefed_test_impl(ctx, tradefed_options = []):
         out = ctx.actions.declare_file("%s/%s" % (tf_test_dir, path_without_package))
         _copy_file(ctx, runfile, out)
         test_runfiles.append(out)
+
+    # Data_bins are special dependencies added to the working directory of the test entry point (as siblings), which are different from regular runfiles above.
+    for data_bin_file in ctx.files.data_bins:
+        data_bin_out = ctx.actions.declare_file("%s/%s" % (tf_test_dir, data_bin_file.basename))
+        if data_bin_out in test_runfiles:
+            continue
+        _copy_file(ctx, data_bin_file, data_bin_out)
+        test_runfiles.append(data_bin_out)
 
     # Gather runfiles.
     runfiles = ctx.runfiles(
@@ -564,7 +582,8 @@ def tradefed_test_suite(
         device_driven_test_config = None,
         host_driven_device_test_config = None,
         test_filter_generator = None,
-        runs_on = []):
+        runs_on = [],
+        data_bins = []):
     """The tradefed_test_suite macro groups all three test types under a single test_suite.o
 
     This enables users or tools to simply run 'b test //path/to:foo_test_suite' and bazel
@@ -589,6 +608,7 @@ def tradefed_test_suite(
       host_driven_device_test_config: default Tradefed test config for the host driven execution mode.
       test_filter_generator: label of a file containing a test filter that will be passed through to TradeFed.
       runs_on: platform variants that this test runs on. The allowed values are 'device', 'host_with_device' and 'host_without_device'.
+      data_bins: executables that need to be installed alongside the test entry point to be used for the test itself.
     """
 
     # Validate names.
@@ -634,7 +654,9 @@ def tradefed_test_suite(
             # There shouldn't be package-external dependencies on the internal tests.
             ("visibility", ["//visibility:private"]),
             # Tradefed harness always builds for host.
-            ("target_compatible_with", ["//build/bazel/platforms/os:linux"]),
+            ("target_compatible_with", ["//build/bazel_common_rules/platforms/os:linux"]),
+            # List of binary modules that should be installed alongside the test
+            ("data_bins", data_bins),
         ],
     )
 
@@ -668,28 +690,31 @@ def tradefed_test_suite(
     if device_driven_test_config or host_driven_device_test_config:
         tradefed_device_test_name = name + "__tf_device_test"
         tests.append(tradefed_device_test_name)
+
+        # manual: The internal tests shouldn't run with ... or :all target patterns.
+        #
+        # exclusive: Device tests should run exclusively (one at a time), since they tend
+        # to acquire resources and can often result in oddities when running in parellel.
+        # Think Activity-based or port-based tests for example.
+        #
+        # TODO(b/302290752), https://github.com/bazelbuild/bazel/issues/17834:
+        # exclusive-if-local does not work with RBE, and behaves exactly
+        # like exclusive. Add exclusive-if-local once it's working.
+        device_test_tags = tags + ["manual"]
+        if not is_env_true(env.get("REMOTE_AVD")):
+            device_test_tags.append("exclusive")
         if device_driven_test_config:
             tradefed_device_driven_test(
                 name = tradefed_device_test_name,
                 template_test_config = None if test_config else template_test_config or device_driven_test_config,
-                # manual: The internal tests shouldn't run with ... or :all target patterns.
-                #
-                # exclusive: Device tests should run exclusively (one at a time), since they tend
-                # to acquire resources and can often result in oddities when running in parellel.
-                # Think Activity-based or port-based tests for example.
-                tags = tags + ["manual", "exclusive-if-local"],
+                tags = device_test_tags,
                 **common_tradefed_attrs
             )
         else:
             tradefed_host_driven_device_test(
                 name = tradefed_device_test_name,
                 template_test_config = None if test_config else template_test_config or host_driven_device_test_config,
-                # manual: The internal tests shouldn't run with ... or :all target patterns.
-                #
-                # exclusive: Device tests should run exclusively (one at a time), since they tend
-                # to acquire resources and can often result in oddities when running in parellel.
-                # Think Activity-based or port-based tests for example.
-                tags = tags + ["manual", "exclusive-if-local"],
+                tags = device_test_tags,
                 **common_tradefed_attrs
             )
 
@@ -700,11 +725,11 @@ def tradefed_test_suite(
         # Warning: be careful when specifying tags here, as tags have special
         # meaning in test suites for filtering tests.
         tags = tags,
-        target_compatible_with = ["//build/bazel/platforms/os:linux"],
+        target_compatible_with = ["//build/bazel_common_rules/platforms/os:linux"],
     )
 
-def _cc_test_filter_generator_impl(ctx):
-    output = ctx.actions.declare_file(ctx.attr.name + "_cc_test_filter")
+def _test_filter_generator_impl(ctx, name_suffix = "", progress_message = ""):
+    output = ctx.actions.declare_file(ctx.attr.name + name_suffix)
     args = ["--out", output.path]
 
     for f in ctx.files.srcs:
@@ -728,12 +753,19 @@ def _cc_test_filter_generator_impl(ctx):
         arguments = args,
         executable = ctx.attr._executable.files_to_run.executable,
         tools = [ctx.attr._executable[DefaultInfo].files_to_run],
-        progress_message = "Generating the test filters for cc tests",
+        progress_message = progress_message,
     )
 
     return [DefaultInfo(
         files = depset([output]),
     )]
+
+def _cc_test_filter_generator_impl(ctx):
+    return _test_filter_generator_impl(
+        ctx,
+        name_suffix = "_cc_test_filter",
+        progress_message = "Generating the test filters for cc tests",
+    )
 
 cc_test_filter_generator = rule(
     attrs = {
@@ -760,6 +792,44 @@ cc_test_filter_generator = rule(
 An executable computes the cc test filter for a test module based on the given
 cc files and the test reference, and writes the result into a output file that
 is stored in the DefaultInfo provider.
+
+Each test reference is a string in the test reference format of ATest:
+    <module name>:<class name>#<method name>,<method name>
+""",
+)
+
+def _java_test_filter_generator_impl(ctx):
+    return _test_filter_generator_impl(
+        ctx,
+        name_suffix = "_java_test_filter",
+        progress_message = "Generating the java test filters",
+    )
+
+java_test_filter_generator = rule(
+    attrs = {
+        "srcs": attr.label_list(
+            allow_files = True,
+            doc = "Source files containing the class and method that the test filter will match.",
+        ),
+        "module_name": attr.string(
+            mandatory = True,
+            doc = "Module name that the test filters are generated on by this target.",
+        ),
+        "_executable": attr.label(
+            default = "//tools/asuite/atest:java-test-filter-generator",
+            doc = "Executable used to generate the java test filter.",
+        ),
+        "_test_reference": attr.label(
+            default = ":test_reference",
+            doc = "Repeatable string flag used to accept the test reference.",
+        ),
+    },
+    implementation = _java_test_filter_generator_impl,
+    doc = """A rule used to generate the java test filter
+
+An executable computes the java test filter for a test module based on the given
+source files and the test reference, and writes the result into an output file
+that is stored in the DefaultInfo provider.
 
 Each test reference is a string in the test reference format of ATest:
     <module name>:<class name>#<method name>,<method name>

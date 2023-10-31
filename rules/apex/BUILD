@@ -65,6 +65,7 @@ config_setting(
     ],
     flag_values = {
         ":api_domain": "unbundled_app",
+        ":within_apex": "False",
     },
 )
 
@@ -76,6 +77,7 @@ config_setting(
     ],
     flag_values = {
         ":api_domain": "unbundled_app",
+        ":within_apex": "False",
     },
 )
 
@@ -200,11 +202,11 @@ apex_toolchain(
 toolchain(
     name = "apex_toolchain_def",
     exec_compatible_with = [
-        "//build/bazel/platforms/arch:x86_64",
-        "//build/bazel/platforms/os:linux",
+        "//build/bazel_common_rules/platforms/arch:x86_64",
+        "//build/bazel_common_rules/platforms/os:linux",
     ],
     target_compatible_with = [
-        "//build/bazel/platforms/os:android",
+        "//build/bazel_common_rules/platforms/os:android",
     ],
     toolchain = ":apex_toolchain",
     toolchain_type = "//build/bazel/rules/apex:apex_toolchain_type",
